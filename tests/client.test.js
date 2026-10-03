@@ -100,11 +100,17 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
       paint()
       return {
         entry, translations, seats,
-        /** Render the provider-card seat registered for one namespace key. */
-        mountSeat(key) {
+        /**
+         * Render the provider-card seat for one namespace key and route.
+         *
+         * The owner hands the seat every row of the family, so the route id
+         * travels with the owner props exactly as ModelsSection dispatches it.
+         */
+        mountSeat(key, route = 'openai-codex') {
           const seat = seats.get(key)
           assert.ok(seat, 'the card seat is registered for ' + key)
-          draw = () => seat.component(seat.entry.inject())
+          const owner = { provider: { provider: route, settingsNs: key }, configured: true, keyConfigured: false }
+          draw = () => seat.component({ ...seat.entry.inject(), ...owner })
           paint()
           return tree
         },
@@ -300,6 +306,11 @@ test('the provider-card seat renders the official openai-codex sign-in on the ll
   await new Promise(resolve => setImmediate(resolve))
   const rendered = handle.mountSeat('llm-pi-ai')
   assert.ok(rendered, 'the card renders')
+  // The family shares one namespace, so the card must decline every other
+  // route on it: rendering there would offer a ChatGPT sign-in on llama-cpp.
+  for (const other of ['llama-cpp', 'command-code']) {
+    assert.equal(handle.mountSeat('llm-pi-ai', other), null, other + ' must not render the card')
+  }
 })
 
 test('the settings page carries the plan page while the card seat stays off it', () => {

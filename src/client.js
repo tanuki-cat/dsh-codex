@@ -280,12 +280,19 @@ window.__ModuleLoader__.load({
 
     /**
      * The official openai-codex route carries no sign-in surface of its own.
-     * This card fills that seat on the llm-pi-ai provider row: the flow is
-     * registered by the host adapter, so all this adds is the button that
-     * calls it and the account facts it produced.
+     * This card fills that seat on its provider row: the flow is registered by
+     * the host adapter, so all this adds is the button that calls it and the
+     * account facts it produced.
+     *
+     * The seat dispatches per settings namespace, and every pi-ai route shares
+     * one namespace — so this component is handed *every* llm-pi-ai row and
+     * must answer for the one route it signs into. Rendering unconditionally
+     * would put a ChatGPT sign-in card on llama-cpp and command-code too.
      */
-    function CodexCard({ t }) {
+    function CodexCard({ provider, t }) {
       const connection = (globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {})['openai-codex']
+      // The owner passes the row's directory entry; only its route id decides.
+      const route = provider?.provider
       const [state, setState] = useState({ loading: true, busy: false, status: undefined, error: false })
       useEffect(() => {
         if (connection === undefined) { setState({ loading: false, busy: false, status: undefined, error: false }); return }
@@ -304,7 +311,7 @@ window.__ModuleLoader__.load({
         void load()
         return () => { live = false }
       }, [connection])
-      if (connection === undefined) return null
+      if (connection === undefined || route !== 'openai-codex') return null
       const status = state.status
       const connected = status?.connected === true
       // The Host answers whether llm-pi-ai offers the flow at all; without it
