@@ -34,6 +34,11 @@ export function store(entries = []) {
       tail = task.catch(() => {})
       return task
     },
+    deleteRecord(key) {
+      const task = tail.then(() => { values.delete(key) })
+      tail = task.catch(() => {})
+      return task
+    },
   }
 }
 export const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })

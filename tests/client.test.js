@@ -54,7 +54,12 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
   // The sandbox is the page's global object, so `document` and the browser
   // doubles are reachable both bare and through `globalThis`.
   const sandbox = {
-    __DSH_CHATGPT_MANAGEMENT__: { 'chatgpt-plan': { path: '/chatgpt-management/chatgpt-plan', token: 'capability' } },
+    __DSH_CHATGPT_MANAGEMENT__: {
+      'chatgpt-plan': { path: '/chatgpt-management/chatgpt-plan', token: 'capability' },
+      // The official route's own endpoint, published only when the host
+      // reports that llm-pi-ai offers its sign-in flow.
+      'openai-codex': { path: '/chatgpt-management/openai-codex', token: 'codex-capability' },
+    },
     document, AbortController, ...environment,
   }
   runInNewContext(readFileSync(new URL('../src/client.js', import.meta.url), 'utf8'), {
@@ -62,15 +67,30 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
   })
   assert.equal(registration.id, 'dsh-llm-chatgpt')
   const module = registration.factory(name => { assert.equal(name, 'react'); return React })
+  // Seats the module registers on slots other than the settings page itself.
+  const seats = new Map()
   return {
     module,
-    /** Mount the registered settings page and render its account section. */
+    /**
+     * Mount the registered settings page and render its account section.
+     *
+     * The module also seats a card on the llm-pi-ai provider row; that slot is
+     * collected here so a test can mount it, and its absence from the rendered
+     * settings page is asserted by the tests that use this harness.
+     */
+    seats,
     mount() {
       let entry, component, translations
       const ctx = {
         locale: { register(_ns, value) { translations = value; return () => {} }, bind() { return key => translations.zh[key] } },
         effect(callback) { callback() },
-        slots: { inject(name, callback) { assert.equal(name, 'settings.section'); callback() }, register(value, view) { entry = value; component = view } },
+        slots: {
+          inject(name, callback) { assert.ok(['settings.section', 'settings.models.provider-card'].includes(name), name); callback() },
+          register(value, view) {
+            if (value.name === 'settings.models.provider-card') { seats.set(value.key, { entry: value, component: view }); return }
+            entry = value; component = view
+          },
+        },
       }
       module.apply(ctx)
       const page = component(entry.inject())
@@ -78,7 +98,18 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
       assert.ok(account, 'the page renders one account section')
       draw = () => account.type(account.props)
       paint()
-      return { entry, translations, get tree() { return tree } }
+      return {
+        entry, translations, seats,
+        /** Render the provider-card seat registered for one namespace key. */
+        mountSeat(key) {
+          const seat = seats.get(key)
+          assert.ok(seat, 'the card seat is registered for ' + key)
+          draw = () => seat.component(seat.entry.inject())
+          paint()
+          return tree
+        },
+        get tree() { return tree },
+      }
     },
   }
 }
@@ -252,3 +283,31 @@ test('blocked popup retains a clickable login URL while waiting for authorizatio
   controller.dispose()
   assert.equal(cancelled, true)
 })
+test('the provider-card seat renders the official openai-codex sign-in on the llm-pi-ai row', async () => {
+  const instance = browser({ environment: {
+    open() { return { location: {}, close() {} } },
+    async fetch(url, init) {
+      assert.match(url, /\/chatgpt-management\/openai-codex\/status$/)
+      assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
+      return { ok: true, async json() { return { available: true, connected: true, account: { name: 'Test Person', plan: 'plus', expires: Date.now() + 86_400_000 } } } }
+    },
+  } })
+  // Applying the module is what seats the card; mount the page first.
+  const handle = instance.mount()
+  // The card is seated on the llm-pi-ai namespace, which is the row the route lives on.
+  assert.equal(instance.seats.has('llm-pi-ai'), true)
+  handle.mountSeat('llm-pi-ai')
+  await new Promise(resolve => setImmediate(resolve))
+  const rendered = handle.mountSeat('llm-pi-ai')
+  assert.ok(rendered, 'the card renders')
+})
+
+test('the settings page carries the plan page while the card seat stays off it', () => {
+  const instance = browser()
+  const page = instance.mount()
+  // The plan page renders the chatgpt-plan connection only; the codex card is
+  // seated on the provider row instead, so it must not appear here.
+  assert.equal(page.entry.name, 'settings.section')
+  assert.equal(page.seats.size, 1)
+})
+

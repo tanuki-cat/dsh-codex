@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-chatgpt",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "ChatGPT subscription provider for DeepSeek Harness using Sign in with ChatGPT",
   "type": "module",
   "main": "./src/index.js",
@@ -16,7 +16,7 @@
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/index.js && node --check src/auth.js && node --check src/wire.js && node --check src/http.js && node --check src/management.js && node --check src/client.js && node --check src/proxy.js && node --check src/model-catalog.js"
+    "check": "node --check src/index.js && node --check src/auth.js && node --check src/wire.js && node --check src/http.js && node --check src/management.js && node --check src/client.js && node --check src/proxy.js && node --check src/model-catalog.js && node --check src/codex.js"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1",

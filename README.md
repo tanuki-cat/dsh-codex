@@ -15,6 +15,7 @@
 - 请求携带会话级 `prompt_cache_key`，使稳定前缀命中订阅接口的提示缓存，而不是每次重算。
 - 登录、账户状态、远程撤销与退出命令。
 - 设置侧栏 ChatGPT 管理页：浏览器登录、自动显示结果、账户状态、可用模型和退出撤销。
+- 官方 `openai-codex` 路由的登录入口：在模型设置页该 provider 卡片上提供登录按钮，无需额外脚本。
 - 可配置 HTTP / HTTPS 代理，用于 OAuth、刷新、模型目录和推理请求。
 
 ## 安装到 DSH
@@ -144,10 +145,16 @@ DSH 已内置官方实现：`@deepseek-ai/dsh-llm-pi-ai` 直接引入 `@earendil
 | 提示缓存亲和 | 内置 `prompt_cache_key` | 0.2.5 起支持 |
 | 图片输入 / WebSocket | 支持 | 不支持（明确拒绝图片） |
 | 模型目录 | 静态 8 个，含成本档位 | 账户 `/v1/models` + 手动条目 |
-| 登录入口 | **无 UI 入口**，见下 | 设置页 + `/chatgpt-plan-login` |
+| 登录入口 | 由本插件在 provider 卡片上提供 | 设置页 + `/chatgpt-plan-login` |
 | 设置页与中文界面 | 无 | 有 |
 
-官方路由的 OAuth 流程已注册到 DSH 授权服务，但宿主没有任何界面调用它：Models 设置页的 `settings.models.sign-in` 槽位属于 DeepSeek 账号，`settings.models.provider-card` 槽位没有注册者。因此需要本仓库的两个脚本：
+官方路由的 OAuth 流程由 pi-ai 注册到 DSH 授权服务，但宿主自身没有任何界面调用它：Models 设置页的 `settings.models.sign-in` 槽位属于 DeepSeek 账号，`settings.models.provider-card` 槽位没有注册者。本插件补上了这个缺口。
+
+**推荐路径（0.2.6 起）**：安装本插件后，在「设置 → 模型」找到 `openai-codex` 卡片，点击卡片上的登录按钮即可。插件注册的是 provider 卡片扩展槽位，只在 llm-pi-ai 的行上渲染，不影响原有 ChatGPT 订阅页。
+
+若列表中还没有该 provider，先在模型页用「添加 → 从目录添加」声明它——pi-ai 适配器只注册 profile 中已声明的路由（`routes = [...profiles().keys()]`），未声明的 provider 即使已登录也无法选择。
+
+**不使用插件的替代路径**：仓库另提供两个独立脚本，效果相同。
 
 ```sh
 # 1. 完成 OAuth 并写入凭据 llm-pi-ai/openai-codex
@@ -159,7 +166,7 @@ node scripts/add-openai-codex-route.mjs
 
 `login-openai-codex.mjs` 直接驱动 pi-ai 的 `openaiCodexOAuth`，并把凭据通过 DSH 同一把跨进程文件锁写入 `$DSH_HOME/.credentials.yaml`，运行中的 DSH 会热加载。它读取 `https_proxy` 等环境变量，环境缺失时回退到 `$DSH_HOME/.env`。
 
-`add-openai-codex-route.mjs` 必需，因为 pi-ai 适配器只注册 profile 中已声明的路由（`routes = [...profiles().keys()]`）；未声明的 provider 即使已登录也无法选择。路由不设 `apiKeyEnv`，以便存储的 OAuth 凭据完成鉴权。
+`add-openai-codex-route.mjs` 用于命令行声明路由；路由不设 `apiKeyEnv`，以便存储的 OAuth 凭据完成鉴权。
 
 官方推理端点是 `https://chatgpt.com/backend-api/codex/responses`（不是 `/v1/responses`），并携带 `chatgpt-account-id` 与 `originator` 请求头。
 

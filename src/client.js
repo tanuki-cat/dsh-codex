@@ -86,6 +86,8 @@ window.__ModuleLoader__.load({
         configuration: '当前配置', configHint: '配置字段在 profile 配置文件中修改，重启后生效。', proxy: '代理地址', inherited: '沿用 DSH 网络配置', manualModels: '手动添加的模型', noManualModels: '无',
         modelHint: '连接后在 DSH 模型选择器中选择该路由与模型。', usage: '管理 ChatGPT 用量与权限', disconnectedHint: '在浏览器中完成 ChatGPT 授权即可连接账户。',
         pendingHint: '浏览器完成授权后，此页面会自动更新。', manual: '手动',
+        codexLogin: '登录 ChatGPT', codexDisconnected: '未连接 ChatGPT 账户', codexExpires: '凭据有效期至',
+        codexHint: '使用官方 openai-codex 路由。点击登录后浏览器会打开授权页面；完成后此卡片会自动更新。',
       },
       en: {
         nav: 'ChatGPT', title: 'ChatGPT subscription', description: 'Connect your ChatGPT account to DSH and use your eligible plan allowance.',
@@ -96,6 +98,8 @@ window.__ModuleLoader__.load({
         configuration: 'Current configuration', configHint: 'Edit these fields in your profile configuration and restart to apply.', proxy: 'Proxy address', inherited: 'Use DSH network configuration', manualModels: 'Manually added models', noManualModels: 'None',
         modelHint: 'Select this provider and a model in the DSH model selector after connecting.', usage: 'Manage ChatGPT usage and permissions', disconnectedHint: 'Authorize ChatGPT in your browser to connect an account.',
         pendingHint: 'This page updates automatically once the browser finishes authorization.', manual: 'Manual',
+        codexLogin: 'Sign in to ChatGPT', codexDisconnected: 'No ChatGPT account connected', codexExpires: 'Credential valid until',
+        codexHint: 'Uses the official openai-codex route. Signing in opens your browser; this card updates once it finishes.',
       },
     }
 
@@ -274,6 +278,84 @@ window.__ModuleLoader__.load({
         h('a', { className: 'dsh-chatgpt-link dsh-chatgpt-usage', href: 'https://chatgpt.com/#settings', target: '_blank', rel: 'noopener noreferrer' }, t('usage')))
     }
 
+    /**
+     * The official openai-codex route carries no sign-in surface of its own.
+     * This card fills that seat on the llm-pi-ai provider row: the flow is
+     * registered by the host adapter, so all this adds is the button that
+     * calls it and the account facts it produced.
+     */
+    function CodexCard({ t }) {
+      const connection = (globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {})['openai-codex']
+      const [state, setState] = useState({ loading: true, busy: false, status: undefined, error: false })
+      useEffect(() => {
+        if (connection === undefined) { setState({ loading: false, busy: false, status: undefined, error: false }); return }
+        let live = true
+        const load = async () => {
+          try {
+            const response = await fetch(`${connection.path}/status`, {
+              headers: { 'x-dsh-chatgpt-token': connection.token },
+              credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+            })
+            if (!response.ok) throw new Error('status failed')
+            const status = await response.json()
+            if (live) setState(current => ({ ...current, loading: false, status }))
+          } catch { if (live) setState(current => ({ ...current, loading: false, error: true })) }
+        }
+        void load()
+        return () => { live = false }
+      }, [connection])
+      if (connection === undefined) return null
+      const status = state.status
+      const connected = status?.connected === true
+      // The Host answers whether llm-pi-ai offers the flow at all; without it
+      // there is nothing this card could sign into.
+      if (status !== undefined && status.available === false) return null
+      const act = async (operation) => {
+        setState(current => ({ ...current, busy: true, error: false }))
+        const popup = operation === 'login' ? globalThis.open('about:blank', '_blank') : undefined
+        if (popup) popup.opener = null
+        try {
+          const response = await fetch(`${connection.path}/${operation}`, {
+            method: 'POST', headers: { 'x-dsh-chatgpt-token': connection.token },
+            credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+          })
+          if (!response.ok) throw new Error('operation failed')
+          const next = await response.json()
+          setState(current => ({ ...current, busy: false, status: next }))
+          if (popup && next?.notice?.url) popup.location.href = next.notice.url
+          else popup?.close()
+        } catch { popup?.close(); setState(current => ({ ...current, busy: false, error: true })) }
+      }
+      const account = status?.account
+      const label = state.loading ? t('loading') : connected ? (account?.name || account?.email || t('connected')) : t('codexDisconnected')
+      const note = connected
+        ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('codexExpires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
+        : t('codexHint')
+      const loginUrl = status?.notice?.url
+      return h('div', { className: 'dsh-chatgpt-block' },
+        h('div', { className: 'dsh-chatgpt-identity' },
+          h('span', { className: 'dsh-chatgpt-avatar', 'aria-hidden': 'true' },
+            h('span', { className: 'dsh-chatgpt-dot', 'data-state': state.loading || state.busy ? 'ongoing' : connected ? 'done' : 'idle' })),
+          h('div', { className: 'dsh-chatgpt-lines' },
+            h('span', { className: 'dsh-chatgpt-name', role: 'status', 'aria-live': 'polite' },
+              h('span', { className: 'dsh-chatgpt-nameText' }, label),
+              connected && h('span', { className: 'dsh-chatgpt-tag', 'data-tone': 'success' }, t('connected'))),
+            note && h('p', { className: 'dsh-chatgpt-note' }, note))),
+        loginUrl && h('p', { className: 'dsh-chatgpt-notice' },
+          h('a', { className: 'dsh-chatgpt-link', href: loginUrl, target: '_blank', rel: 'noopener noreferrer' }, t('open'))),
+        h('div', { className: 'dsh-chatgpt-actions' },
+          connected
+            ? h('span', { className: 'dsh-chatgpt-push' }, h('button', {
+              type: 'button', className: 'dsh-chatgpt-button', 'data-variant': 'danger',
+              disabled: state.busy, onClick: () => void act('logout'),
+            }, t('logout')))
+            : h('button', {
+              type: 'button', className: 'dsh-chatgpt-button', 'data-variant': 'primary',
+              disabled: state.loading || state.busy, onClick: () => void act('login'),
+            }, state.busy ? h('span', { className: 'dsh-chatgpt-spinner dsh-chatgpt-spinnerSm' }) : null, t('codexLogin'))),
+        state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')))
+    }
+
     function apply(ctx) {
       const connections = globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {}
       ctx.effect(() => ctx.locale.register(NS, dictionaries), 'chatgpt settings translations')
@@ -282,6 +364,14 @@ window.__ModuleLoader__.load({
         name: 'settings.section', id: 'chatgpt-subscription', order: 15, label: () => t('nav'),
         inject: () => ({ connections, t }),
       }, Page))
+      // The seat is keyed by the row's settings namespace, so this renders on
+      // every llm-pi-ai provider card — openai-codex among them — and nowhere
+      // else. Registered unconditionally: the Host decides per request whether
+      // the flow exists.
+      ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
+        name: 'settings.models.provider-card', key: 'llm-pi-ai',
+        locale: NS, inject: () => ({ t }),
+      }, CodexCard))
     }
     return { name: 'chatgpt-settings', inject: ['slots', 'locale'], apply, createController }
   },

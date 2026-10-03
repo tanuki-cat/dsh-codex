@@ -3,9 +3,10 @@ import { LlmAdapter, LlmError, attributionHeaders } from '@deepseek-ai/dsh-llm'
 import { accessGrant, login, logout, readRegistration } from './auth.js'
 import { PlanError } from './http.js'
 import { models, streamResponse } from './wire.js'
-import { createManagement, registerManagement } from './management.js'
+import { createCodexManagement, createManagement, registerCodexManagement, registerManagement } from './management.js'
 import { createProxyTransport } from './proxy.js'
 import { normalizeExtraModels, reasoningFor, withExtraModels } from './model-catalog.js'
+import { codexFlow } from './codex.js'
 
 export const name = 'llm-chatgpt'
 export const inject = ['llm', 'credentials', 'authorization']
@@ -69,6 +70,12 @@ export function apply(ctx, config = {}) {
   ctx.inject(['webServer', 'webRuntime'], web => {
     const management = createManagement(ctx, key, adapter, { provider, callbackPort: port, requestTimeoutMs: timeoutMs, proxyUrl: transport.proxyUrl, extraModels })
     registerManagement(web, management, provider, () => logout(ctx.credentials, key, { headers, fetcher }))
+    // The official openai-codex route carries no sign-in surface of its own:
+    // DSH registers its flow but nothing calls it. This endpoint lets the
+    // settings page drive that flow, and it is registered only where the flow
+    // exists, so a composition without llm-pi-ai reports the route as
+    // unavailable instead of offering a button that cannot work.
+    if (codexFlow(ctx) !== undefined) registerCodexManagement(web, createCodexManagement(ctx))
   })
   ctx.inject(['commands', 'userQuestions'], interactive => {
     interactive.commands.register({

@@ -1,7 +1,83 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readRegistration } from './auth.js'
+import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
+
+/**
+ * The official openai-codex sign-in, as the settings page drives it.
+ *
+ * It owns one attempt at a time, mirroring the seam's own exclusion, so two
+ * page tabs cannot prompt the same human twice. Notices are kept as the latest
+ * one seen; the page polls them rather than holding a stream open, which keeps
+ * the management surface a plain request/response route.
+ * @param ctx - the plugin context carrying the authorization and credential seams.
+ * @returns the codex operations the management route exposes.
+ */
+export function createCodexManagement(ctx) {
+  let current = { state: 'idle', notice: undefined, error: undefined }
+  let active
+  let closed = false
+  const publicError = error => error?.name === 'AbortError'
+    ? 'Sign-in cancelled.'
+    : 'Sign-in failed. Check your connection and account permissions, then try again.'
+  async function status() {
+    const record = await ctx.credentials.readRecord(CODEX_KEY)
+    const account = readCodexAccount(record)
+    return {
+      available: codexFlow(ctx) !== undefined,
+      connected: account !== undefined && typeof record?.payload?.refresh === 'string',
+      account,
+      ...current,
+    }
+  }
+  function start() {
+    if (closed) throw new Error('ChatGPT management is closed.')
+    if (active !== undefined || ctx.authorization.describe(CODEX_KEY)?.inFlight) {
+      throw new Error('An OpenAI sign-in is already running.')
+    }
+    const controller = new AbortController()
+    const attempt = { controller, job: undefined }
+    active = attempt
+    current = { state: 'pending', notice: undefined, error: undefined }
+    attempt.job = beginCodexLogin(ctx, {
+      signal: controller.signal,
+      notify(notice) {
+        if (active !== attempt) return
+        current = { ...current, notice }
+      },
+    }).then(outcome => {
+      if (active !== attempt) return
+      current = outcome === 'authorized'
+        ? { state: 'authorized', notice: undefined, error: undefined }
+        : { state: 'cancelled', notice: undefined, error: undefined }
+    }, error => {
+      if (active !== attempt) return
+      current = { state: 'failed', notice: undefined, error: publicError(error) }
+    }).finally(() => { if (active === attempt) active = undefined })
+    // The attempt owns its own failures; an unobserved rejection here would
+    // otherwise surface as an unhandled one.
+    attempt.job.catch(() => {})
+    return status()
+  }
+  async function cancel() {
+    active?.controller.abort()
+    ctx.authorization.cancel(CODEX_KEY)
+    await active?.job
+    if (current.state === 'pending') current = { state: 'cancelled', notice: undefined, error: undefined }
+    return status()
+  }
+  return {
+    status, start, cancel,
+    async signOut() {
+      await cancel()
+      await forgetCodexLogin(ctx)
+      current = { state: 'idle', notice: undefined, error: undefined }
+      return status()
+    },
+    async dispose() { closed = true; await cancel() },
+  }
+}
 
 export function createManagement(ctx, key, adapter, config) {
   let current = { state: 'idle', loginUrl: undefined, error: undefined }
@@ -91,34 +167,68 @@ export function trustedManagementRequest(req, token, trustedHosts = []) {
   } catch { return false }
 }
 
-export function registerManagement(ctx, manager, provider, logout) {
-  const token = randomBytes(32).toString('hex')
-  const path = `/chatgpt-management/${provider}`
+/** Publish one management endpoint's path and token to the browser. */
+function injectConnection(ctx, id, path, token) {
   ctx.on('webserver/index-inject', table => {
     // A computed index script merges instances without exposing OAuth credentials.
-    table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [provider]: { path, token } })});` })
+    table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [id]: { path, token } })});` })
   })
+}
+
+/** Serve one management endpoint's operations under a token-guarded prefix. */
+function serve(ctx, path, token, routes) {
   const dispose = ctx.webServer.register({ kind: 'prefix', path, async handler(req, res) {
     res.setHeader('cache-control', 'no-store')
     res.setHeader('content-type', 'application/json; charset=utf-8')
     const reply = (code, value) => { res.writeHead(code); res.end(JSON.stringify(value)) }
     if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
     const operation = new URL(req.url, 'http://127.0.0.1').pathname.slice(path.length)
-    if ((req.method !== 'GET' || !['/status', '/models'].includes(operation))
-      && (req.method !== 'POST' || !['/login', '/cancel', '/logout'].includes(operation))) {
-      reply(405, { error: 'Unsupported management operation.' }); return
-    }
+    const route = routes[operation]
+    if (route === undefined || route.method !== req.method) { reply(405, { error: 'Unsupported management operation.' }); return }
     try {
-      let result
-      if (operation === '/status') result = await manager.status()
-      else if (operation === '/models') result = { models: await manager.models() }
-      else if (operation === '/login') result = await manager.start()
-      else if (operation === '/cancel') { await manager.cancel(); result = await manager.status() }
-      else { await manager.signOut(logout); result = await manager.status() }
-      reply(200, result)
+      reply(200, await route.run())
     } catch {
       reply(400, { error: 'ChatGPT operation failed. Check your connection and account permissions, then retry.' })
     }
   } })
+  return dispose
+}
+
+export function registerManagement(ctx, manager, provider, logout) {
+  const token = randomBytes(32).toString('hex')
+  const path = `/chatgpt-management/${provider}`
+  injectConnection(ctx, provider, path, token)
+  const dispose = serve(ctx, path, token, {
+    '/status': { method: 'GET', run: () => manager.status() },
+    '/models': { method: 'GET', run: async () => ({ models: await manager.models() }) },
+    '/login': { method: 'POST', run: () => manager.start() },
+    // Both mutations answer with the resulting status: the page renders from
+    // one shape whichever operation it called.
+    '/cancel': { method: 'POST', run: async () => { await manager.cancel(); return manager.status() } },
+    '/logout': { method: 'POST', run: async () => { await manager.signOut(logout); return manager.status() } },
+  })
   ctx.effect(() => () => { dispose(); return manager.dispose() }, 'chatgpt management routes')
+}
+
+/**
+ * Serve the official openai-codex sign-in to the settings page.
+ *
+ * Separate from the chatgpt-plan endpoint because it authorizes a different
+ * record under a different adapter family; the page renders it on the
+ * llm-pi-ai provider card, where that route's own settings live.
+ * @param ctx - the plugin context carrying webServer and webRuntime.
+ * @param manager - the codex management state machine.
+ * @returns nothing; both the endpoint and its index injection are owned by the caller's fiber.
+ */
+export function registerCodexManagement(ctx, manager) {
+  const token = randomBytes(32).toString('hex')
+  const path = `/chatgpt-management/${CODEX_PROVIDER}`
+  injectConnection(ctx, CODEX_PROVIDER, path, token)
+  const dispose = serve(ctx, path, token, {
+    '/status': { method: 'GET', run: () => manager.status() },
+    '/login': { method: 'POST', run: () => manager.start() },
+    '/cancel': { method: 'POST', run: () => manager.cancel() },
+    '/logout': { method: 'POST', run: () => manager.signOut() },
+  })
+  ctx.effect(() => () => { dispose(); return manager.dispose() }, 'codex management routes')
 }

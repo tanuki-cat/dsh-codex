@@ -1,7 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createManagement, registerManagement, trustedManagementRequest } from '../src/management.js'
+import { registerHooks } from 'node:module'
 import { grant, store } from './helpers.js'
+
+// The management surface imports the codex adapter, which addresses credential
+// records through the host's key grammar; that one import is doubled here.
+const hooks = registerHooks({ resolve(specifier, context, next) {
+  if (specifier === '@deepseek-ai/dsh-credentials') {
+    return { url: `data:text/javascript,${encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id")}`, shortCircuit: true }
+  }
+  return next(specifier, context)
+} })
+const { createManagement, registerManagement, trustedManagementRequest } = await import('../src/management.js')
+hooks.deregister()
 
 const key = 'llm-chatgpt/chatgpt-plan'
 function managementHost() {
