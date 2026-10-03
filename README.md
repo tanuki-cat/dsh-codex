@@ -20,7 +20,7 @@
 
 ## 安装到 DSH
 
-需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.5 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
+需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.7 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
 
 本机现有 `web` profile 可在普通终端执行安装脚本：
 
@@ -57,7 +57,7 @@ npm pack --cache .npm-cache
 将生成的 tarball 安装到自己的 profile，例如已有的 `web` profile：
 
 ```sh
-dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.5.tgz
+dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.7.tgz
 ```
 
 新版 DSH base 已提供 `authorization` 服务。只有自定义 profile 缺失该服务时，才需要安装与宿主版本一致的 `@deepseek-ai/dsh-authorization` 并添加对应配置项。不要引入不同版本的 DSH 核心服务。

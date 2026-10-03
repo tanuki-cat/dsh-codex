@@ -1,12 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, copyFileSync, chmodSync, writeFileSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, copyFileSync, chmodSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
+const project = fileURLToPath(new URL('..', import.meta.url))
 const installer = fileURLToPath(new URL('../scripts/install-local.mjs', import.meta.url))
+const tarballName = 'dsh-llm-chatgpt-' + JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version + '.tgz'
 const countEntries = patch => (patch.match(/^\s*-?\s*id: llm-chatgpt\s*$/gm) ?? []).length
 const entryBlock = patch => {
   const lines = patch.split('\n')
@@ -20,6 +22,11 @@ const entryBlock = patch => {
   return ''
 }
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+
+/** Stand-in tarballs this run created; removed when the process exits. */
+const stagedByTest = new Set()
+process.on('exit', () => { for (const file of stagedByTest) rmSync(file, { force: true }) })
+
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'dsh-chatgpt-install-test-'))
   const bin = join(home, 'bin')
@@ -33,10 +40,27 @@ function fixture() {
   writeFileSync(join(profile, 'cordis.patch.yml'), original)
   copyFileSync(new URL('./fixtures/dsh-install-cli.mjs', import.meta.url), join(bin, 'dsh'))
   chmodSync(join(bin, 'dsh'), 0o700)
-  const run = (extra = {}, args = []) => spawnSync(process.execPath, [installer, ...args], {
-    encoding: 'utf8', env: { ...process.env, DSH_HOME: home, PATH: `${bin}:${process.env.PATH}`, ...extra },
-  })
-  return { profile, original, manifest, run }
+  // The installer resolves its input as <project>/dsh-llm-chatgpt-<version>.tgz,
+  // so a test of the installer's own logic would otherwise depend on `npm pack`
+  // having run — failing the moment the version is bumped, for reasons that have
+  // nothing to do with what it asserts. A stand-in is staged on first use and
+  // removed by cleanup(); a real tarball already there is left untouched.
+  const tarball = join(project, tarballName)
+  let staged = false
+  const stage = () => {
+    if (staged) return
+    staged = true
+    if (existsSync(tarball)) return
+    writeFileSync(tarball, 'fixture tarball')
+    stagedByTest.add(tarball)
+  }
+  const run = (extra = {}, args = []) => {
+    stage()
+    return spawnSync(process.execPath, [installer, ...args], {
+      encoding: 'utf8', env: { ...process.env, DSH_HOME: home, PATH: `${bin}:${process.env.PATH}`, ...extra },
+    })
+  }
+  return { profile, original, manifest, run, home }
 }
 
 test('installer enables an already-installed plugin despite pre-existing schema issues and remains idempotent', () => {

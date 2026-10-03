@@ -124,9 +124,11 @@ openai-codex:
 
 验收：模型选择器只保留 `openai-codex` 路由，重启后无诊断。
 
-## 方案 A 实施结果（0.2.6）
+## 方案 A 实施结果（0.2.6，渲染修复于 0.2.7）
 
 阶段一已实施：插件现在自带官方 `openai-codex` 的登录入口。
+
+0.2.7 修正了首版的一个缺陷：provider-card 槽位按 settings namespace 分发，而 `llama-cpp`、`command-code` 与 `openai-codex` 同属 `llm-pi-ai` 命名空间，组件此前无条件渲染，导致三行都出现同一份账户状态。现在按 owner props 里的路由 id 判定，只有 `openai-codex` 行渲染。
 
 ### 变更
 
