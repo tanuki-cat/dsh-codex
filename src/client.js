@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
         login: 'Continue with ChatGPT', cancel: '取消登录', logout: '退出并撤销会话', refresh: '刷新模型列表',
         open: '打开浏览器完成授权', models: '可用模型', empty: '登录后刷新可用模型。', error: '操作失败，请检查网络与账户权限后重试。',
         loading: '正在加载…', provider: '模型路由', port: '登录回调端口', timeout: '请求超时（毫秒）', auto: '自动选择', proxyError: '代理请求失败，请确认代理地址正确且代理已启动，然后重试登录。',
-        configuration: '当前配置', configHint: '配置字段在 profile 配置文件中修改，重启后生效。', proxy: '代理地址', inherited: '沿用 DSH 网络配置',
+        configuration: '当前配置', configHint: '配置字段在 profile 配置文件中修改，重启后生效。', proxy: '代理地址', inherited: '沿用 DSH 网络配置', manualModels: '手动添加的模型', noManualModels: '无',
         modelHint: '连接后在 DSH 模型选择器中选择该路由与模型。', usage: '管理 ChatGPT 用量与权限',
       },
       en: {
@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
         login: 'Continue with ChatGPT', cancel: 'Cancel sign-in', logout: 'Sign out and revoke session', refresh: 'Refresh models',
         open: 'Open browser to authorize', models: 'Available models', empty: 'Sign in and refresh the available models.', error: 'Operation failed. Check your network and account permissions, then retry.',
         loading: 'Loading…', provider: 'Provider route', port: 'Callback port', timeout: 'Request timeout (milliseconds)', auto: 'Automatic', proxyError: 'The proxy request failed. Check the proxy address and make sure the proxy is running, then sign in again.',
-        configuration: 'Current configuration', configHint: 'Edit these fields in your profile configuration and restart to apply.', proxy: 'Proxy address', inherited: 'Use DSH network configuration',
+        configuration: 'Current configuration', configHint: 'Edit these fields in your profile configuration and restart to apply.', proxy: 'Proxy address', inherited: 'Use DSH network configuration', manualModels: 'Manually added models', noManualModels: 'None',
         modelHint: 'Select this provider and a model in the DSH model selector after connecting.', usage: 'Manage ChatGPT usage and permissions',
       },
     }
@@ -157,7 +157,8 @@ window.__ModuleLoader__.load({
         h('dl', null, h('dt', null, t('provider')), h('dd', null, provider),
           h('dt', null, t('port')), h('dd', null, status?.callbackPort || t('auto')),
           h('dt', null, t('timeout')), h('dd', null, status?.requestTimeoutMs ?? '—'),
-          h('dt', null, t('proxy')), h('dd', null, status?.proxyUrl || t('inherited'))),
+          h('dt', null, t('proxy')), h('dd', null, status?.proxyUrl || t('inherited')),
+          h('dt', null, t('manualModels')), h('dd', null, status?.extraModels?.join(', ') || t('noManualModels'))),
         h('p', { style: style.muted }, t('configHint')))
     }
     function Page({ connections, t }) {

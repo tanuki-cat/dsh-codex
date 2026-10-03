@@ -1,5 +1,13 @@
 # ChatGPT 订阅接入 DSH
 
+## 模型目录与思考强度
+
+本机已登录账户的 DSH 模型选择器展示五个账户目录模型，缺少 gpt-6.1-sol；现有适配器只转发 `GET /v1/models` 中 `visibility=list` 的条目，且 `resolveModel()` 未提供 `reasoning` 元数据，因此 DSH 没有思考强度选项。官方说明该 endpoint 是账户模型目录；公开模型文档列出 gpt-6.1-sol 及其 reasoning.effort，但公开文档不证明该账户已获授权。
+
+插件 0.2.3 为目录中已知模型返回 DSH 的 exact model reasoning 努力级别，不为未知模型推断级别。gpt-6.1-sol 使用 low / medium / high / xhigh / max，排除 none、minimal；GPT-6 Astra 同组；GPT-5.6 Sol / Terra / Luna 使用 none / low / medium / high / xhigh / max；GPT-5.5 使用 none / low / medium / high / xhigh。省略强度时沿用服务端默认，避免改写既有会话行为。选择时按现有 Responses `reasoning.effort` 传输。
+
+额外提供显式 `extraModels` profile 配置及安装脚本 `--model gpt-6.1-sol`，将指定模型以“手动添加，需账户权限”描述合并到选择器，不把其当作账户目录返回或默认为可用。仅当已连接账户后展示；去重、规范化和错误配置需验证。界面显示来源区分，配置保存在 profile。真实调用是否获准须升级后用该账户发起请求验证，失败时仍保留精确 HTTP 状态。
+
 ## 工具结果 HTTP 400 修复
 
 本机失败会话 session-c3b34d90-901a-4387-9061-346471f0b2dd 的第一步成功生成 run_code 调用，第二步返回 400。assistant/message 保存了工具调用，但 replayState.response.items=[]；requestBody 使用该空数组并跳过实际消息内容，最终只发送 function_call_output，没有对应 function_call。后续轮次复用相同历史继续失败。

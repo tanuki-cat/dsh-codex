@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { captureSchemaBaseline, validateInstalledSchema } from './install-validation.mjs'
 import { normalizeProxyUrl } from '../src/proxy.js'
+import { normalizeExtraModels } from '../src/model-catalog.js'
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'))
@@ -17,8 +18,16 @@ const run = (args, options = {}) => spawnSync('dsh', args, { encoding: 'utf8', .
 
 try {
   const args = process.argv.slice(2)
-  if (args.length !== 0 && (args.length !== 2 || args[0] !== '--proxy')) throw new Error('用法：node scripts/install-local.mjs [--proxy http://127.0.0.1:7890]')
-  const proxyUrl = args.length ? normalizeProxyUrl(args[1]) : undefined
+  if (args.length % 2 !== 0) throw new Error('用法：node scripts/install-local.mjs [--proxy http://127.0.0.1:7890] [--model gpt-6.1-sol]')
+  const supplied = new Map()
+  for (let index = 0; index < args.length; index += 2) {
+    if (!['--proxy', '--model'].includes(args[index]) || supplied.has(args[index])) {
+      throw new Error('用法：node scripts/install-local.mjs [--proxy http://127.0.0.1:7890] [--model gpt-6.1-sol]')
+    }
+    supplied.set(args[index], args[index + 1])
+  }
+  const proxyUrl = supplied.has('--proxy') ? normalizeProxyUrl(supplied.get('--proxy')) : undefined
+  const extraModels = supplied.has('--model') ? normalizeExtraModels([supplied.get('--model')]) : undefined
   const versionResult = run(['--version'])
   if (versionResult.error || versionResult.status !== 0) throw new Error('无法读取本机 dsh 版本。')
   const runtimeVersion = versionResult.stdout.trim()
@@ -65,8 +74,10 @@ try {
     const addition = readFileSync(join(project, 'examples', 'cordis.patch.yml'), 'utf8')
     nextPatch = `${currentPatch}${currentPatch.endsWith('\n') || !currentPatch ? '' : '\n'}\n${addition}`
   }
-  if (proxyUrl !== undefined) {
-    const override = `- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n    proxyUrl: ${JSON.stringify(proxyUrl)}\n`
+  if (proxyUrl !== undefined || extraModels !== undefined) {
+    const override = `- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n`
+      + (proxyUrl === undefined ? '' : `    proxyUrl: ${JSON.stringify(proxyUrl)}\n`)
+      + (extraModels === undefined ? '' : `    extraModels: ${JSON.stringify(extraModels)}\n`)
     if (!nextPatch.endsWith(override)) nextPatch = `${nextPatch}${nextPatch.endsWith('\n') ? '' : '\n'}\n${override}`
   }
   const patchChanged = nextPatch !== currentPatch

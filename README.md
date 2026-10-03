@@ -16,7 +16,7 @@
 
 ## 安装到 DSH
 
-需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.2 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
+需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.3 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
 
 本机现有 `web` profile 可在普通终端执行安装脚本：
 
@@ -29,6 +29,14 @@ node /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/scripts/install-local.mj
 ```sh
 node /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/scripts/install-local.mjs --proxy http://127.0.0.1:7890
 ```
+
+若账户模型目录暂未列出 `gpt-6.1-sol`，可显式增加一个待验证的手动选项：
+
+```sh
+node /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/scripts/install-local.mjs --proxy http://127.0.0.1:7890 --model gpt-6.1-sol
+```
+
+此命令只把模型加入选择器，名称标记 `manual; verify access`；它不证明账户已获该模型的订阅调用权限。只有真正完成一次推理请求才能验证。此参数合并到 profile，重启 DSH 后生效。
 
 此参数合并到 profile 的 `llm-chatgpt` 配置，保存后重启 DSH 生效。可以使用 `--proxy ""` 清除显式代理、恢复 DSH 原有网络策略。
 
@@ -45,7 +53,7 @@ npm pack --cache .npm-cache
 将生成的 tarball 安装到自己的 profile，例如已有的 `web` profile：
 
 ```sh
-dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.2.tgz
+dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.3.tgz
 ```
 
 新版 DSH base 已提供 `authorization` 服务。只有自定义 profile 缺失该服务时，才需要安装与宿主版本一致的 `@deepseek-ai/dsh-authorization` 并添加对应配置项。不要引入不同版本的 DSH 核心服务。
@@ -87,6 +95,7 @@ dsh --profile web
 | `callbackPort` | `0` | 本机回调端口；0 自动选择可用端口 |
 | `requestTimeoutMs` | `600000` | 单次推理请求总超时，单位毫秒 |
 | `proxyUrl` | 空 | HTTP / HTTPS 代理地址，例如 `http://127.0.0.1:7890`；空值沿用 DSH 网络策略 |
+| `extraModels` | `[]` | 显式加入选择器的模型 ID，例如 `["gpt-6.1-sol"]`；是否有权调用由账户和 API 决定 |
 
 显式代理只作用于本插件，不修改其他插件的全局网络设置。OAuth token / JWKS、刷新、撤销、模型列表及 SSE 推理均通过同一代理；本机回调监听器和浏览器由其各自网络设置管理。管理页显示当前代理地址，但参数仍通过 profile 修改。仅支持 HTTP / HTTPS 代理，不支持 SOCKS 或内嵌代理账号密码；采用宿主已携带的 `undici`（^8.11.2）ProxyAgent，未配置时不加载该模块。显式代理连接失败不会自动回退直连。
 
@@ -102,7 +111,7 @@ dsh --profile web
 
 工具结果采用 DSH 新版独立 `tool` 消息，使用顶层 `toolCallId` 关联 Responses 的 `function_call_output`。未声明工具动态更新模式：由 DSH LlmRuntime 将 developer 更新消息投影为当前工具声明；直接向适配器传入未经投影的 developer 消息会被拒绝。旧版 `tool-result` 内容块不属于本版本支持的输入接口。
 
-模型列表直接取自账户的 `/v1/models`，只展示 `visibility: list` 条目。没有 API Key 计费回退，也不会读取 Codex 的登录文件。订阅使用受账户额度约束，具体见 [账户与用量说明](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)；接口参数限制见 [官方预览限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
+模型列表优先取自账户的 `/v1/models`，只展示 `visibility: list` 条目；配置的 `extraModels` 随后追加并明确标记为手动项。已知模型的思考强度依照官方模型文档展示；未知 ID 不臆测支持的档位。`gpt-6.1-sol` 仅展示 `low`、`medium`、`high`、`xhigh`、`max`，无 `none` / `minimal`；未选择强度时沿用服务端默认。没有 API Key 计费回退，也不会读取 Codex 的登录文件。订阅使用受账户额度约束，具体见 [账户与用量说明](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)；接口参数限制见 [官方预览限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
 
 ## 验证范围
 

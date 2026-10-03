@@ -61,3 +61,14 @@ test('installer merges a proxy override without duplicating it on repeated runs'
   assert.equal(current.run({ TEST_SCHEMA_PLUGIN_ERROR: '1' }, ['--proxy', '127.0.0.1:7891']).status, 1)
   assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
 })
+
+test('installer adds one explicitly named model while preserving the proxy', () => {
+  const current = fixture()
+  const args = ['--proxy', '127.0.0.1:7890', '--model', 'gpt-6.1-sol']
+  assert.equal(current.run({}, args).status, 0)
+  const configured = readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8')
+  assert.match(configured, /proxyUrl: "http:\/\/127\.0\.0\.1:7890"/)
+  assert.match(configured, /extraModels: \["gpt-6\.1-sol"\]/)
+  assert.equal(current.run({}, args).status, 0)
+  assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
+})

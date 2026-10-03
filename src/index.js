@@ -5,6 +5,7 @@ import { PlanError } from './http.js'
 import { models, streamResponse } from './wire.js'
 import { createManagement, registerManagement } from './management.js'
 import { createProxyTransport } from './proxy.js'
+import { normalizeExtraModels, reasoningFor, withExtraModels } from './model-catalog.js'
 
 export const name = 'llm-chatgpt'
 export const inject = ['llm', 'credentials', 'authorization']
@@ -26,6 +27,7 @@ export function apply(ctx, config = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('callbackPort must be an integer from 0 through 65535')
   const timeoutMs = config.requestTimeoutMs ?? 600_000
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 2_147_483_647) throw new Error('requestTimeoutMs is out of range')
+  const extraModels = normalizeExtraModels(config.extraModels)
   const key = credentialKey(name, provider)
   const hostKey = credentialKey(name, 'host')
   const headers = attributionHeaders()
@@ -39,11 +41,14 @@ export function apply(ctx, config = {}) {
       if (!await ctx.credentials.readRecord(key)) return []
       try {
         const grant = await accessGrant(ctx.credentials, key, { headers, fetcher })
-        return (await models(grant, { headers, fetcher })).map(model => ({ ...model, provider }))
+        return withExtraModels(await models(grant, { headers, fetcher }), extraModels)
+          .map(model => ({ ...model, provider }))
       } catch (error) { throw asLlmError(error) }
     }
     async resolveModel(_provider, model) {
-      return { provider, id: model, name: model, inputModalities: ['text'] }
+      const reasoning = reasoningFor(model)
+      return { provider, id: model, name: model, inputModalities: ['text'],
+        ...reasoning === undefined ? {} : { reasoning } }
     }
     async *stream(options) {
       try {
@@ -62,7 +67,7 @@ export function apply(ctx, config = {}) {
     },
   })
   ctx.inject(['webServer', 'webRuntime'], web => {
-    const management = createManagement(ctx, key, adapter, { provider, callbackPort: port, requestTimeoutMs: timeoutMs, proxyUrl: transport.proxyUrl })
+    const management = createManagement(ctx, key, adapter, { provider, callbackPort: port, requestTimeoutMs: timeoutMs, proxyUrl: transport.proxyUrl, extraModels })
     registerManagement(web, management, provider, () => logout(ctx.credentials, key, { headers, fetcher }))
   })
   ctx.inject(['commands', 'userQuestions'], interactive => {
