@@ -16,7 +16,7 @@
 
 ## 安装到 DSH
 
-需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.3 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
+需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.4 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
 
 本机现有 `web` profile 可在普通终端执行安装脚本：
 
@@ -53,7 +53,7 @@ npm pack --cache .npm-cache
 将生成的 tarball 安装到自己的 profile，例如已有的 `web` profile：
 
 ```sh
-dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.3.tgz
+dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.4.tgz
 ```
 
 新版 DSH base 已提供 `authorization` 服务。只有自定义 profile 缺失该服务时，才需要安装与宿主版本一致的 `@deepseek-ai/dsh-authorization` 并添加对应配置项。不要引入不同版本的 DSH 核心服务。
@@ -68,7 +68,7 @@ dsh --profile web
 
 打开“设置”，在左侧选择“ChatGPT”。页面显示连接状态及账户信息，点击 **Continue with ChatGPT** 会打开浏览器授权窗口。OAuth 完成后页面自动更新状态和模型列表，无需手动确认；浏览器阻止弹窗时使用页面中的“打开浏览器完成授权”链接。登录期间可取消；已连接时可刷新模型或退出并撤销会话。
 
-页面显示当前模型路由、回调端口和请求超时供核对。配置参数仍通过 profile 配置文件修改；选择模型沿用 DSH 的模型选择器。管理页不会自动修改默认模型，也不显示 OAuth 凭据。订阅使用说明遵循 [OpenAI 官方 UI 指引](https://developers.openai.com/siwc/ui-ux-guidelines)。
+页面样式全部使用 DSH 主题 token，跟随浅色 / 深色主题与宿主换肤；账户卡片显示状态点、账户身份和连接标签，可用模型与「当前配置」（模型路由、回调端口、请求超时、代理地址、手动模型）分区块列出。配置参数仍通过 profile 配置文件修改；选择模型沿用 DSH 的模型选择器。管理页不会自动修改默认模型，也不显示 OAuth 凭据。订阅使用说明遵循 [OpenAI 官方 UI 指引](https://developers.openai.com/siwc/ui-ux-guidelines)。
 
 也可以在 DSH 会话中使用保留的命令入口：
 
