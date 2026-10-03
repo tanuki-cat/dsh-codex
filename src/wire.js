@@ -19,6 +19,17 @@ function usableReplay(items, content) {
   return text === nativeText
 }
 
+// The subscription endpoint routes each request by this affinity key. Without
+// it an unchanged prefix is re-billed in full whenever the upstream cache
+// replica changes; the public client sends the session identity here.
+const CACHE_KEY_LIMIT = 64
+
+function cacheAffinityKey(value) {
+  if (typeof value !== 'string') return undefined
+  const key = Array.from(value).slice(0, CACHE_KEY_LIMIT).join('')
+  return key === '' ? undefined : key
+}
+
 export function requestBody(options) {
   if (options.stop?.length) throw new PlanError('ChatGPT plan requests do not support stop sequences.', 'UNSUPPORTED_OPTION')
   const input = []
@@ -55,6 +66,8 @@ export function requestBody(options) {
     flush()
   }
   const body = { model: options.model, input, stream: true, store: false, include: ['reasoning.encrypted_content'] }
+  const affinity = cacheAffinityKey(options.sessionId)
+  if (affinity !== undefined) body.prompt_cache_key = affinity
   if (instructions.length) body.instructions = instructions.join('\n\n')
   if (options.reasoningEffort) body.reasoning = { effort: options.reasoningEffort, summary: 'auto' }
   if (options.tools?.length) body.tools = [{ type: 'namespace', name: 'dsh',

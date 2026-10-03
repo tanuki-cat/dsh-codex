@@ -86,6 +86,17 @@ test('unprojected developer tool updates fail explicitly', () => {
   ] }), error => error.code === 'UNSUPPORTED_CONTENT')
 })
 
+test('session identity supplies the prompt cache affinity key', () => {
+  const first = requestBody({ ...options, sessionId: 'session-883f9d97-63c8-41f1-9c30-64c660578739', messages: [] })
+  assert.equal(first.prompt_cache_key, 'session-883f9d97-63c8-41f1-9c30-64c660578739')
+  // Longest whole characters first: the endpoint rejects keys beyond 64 code points.
+  const long = requestBody({ ...options, sessionId: '😀'.repeat(70), messages: [] })
+  assert.equal(Array.from(long.prompt_cache_key).length, 64)
+  // Absent affinity keeps the field off the wire instead of sending an empty key.
+  assert.equal('prompt_cache_key' in requestBody(options), false)
+  assert.equal('prompt_cache_key' in requestBody({ ...options, sessionId: '' }), false)
+})
+
 test('images and unsupported stop controls fail explicitly', () => {
   assert.throws(() => requestBody({ ...options, stop: ['end'] }), /stop/)
   assert.throws(() => requestBody({ ...options, messages: [{ role: 'user', content: [{ type: 'image' }] }] }), /text input only/)

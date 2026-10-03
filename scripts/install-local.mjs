@@ -15,6 +15,102 @@ const directory = join(home, 'profiles', profile)
 const patchFile = join(directory, 'cordis.patch.yml')
 const tarball = join(project, `dsh-llm-chatgpt-${manifest.version}.tgz`)
 const run = (args, options = {}) => spawnSync('dsh', args, { encoding: 'utf8', ...options })
+const templateLines = readFileSync(join(project, 'examples', 'cordis.patch.yml'), 'utf8').split('\n')
+// The installer owns this entry, so the template's manual-merge guidance is
+// recognized in existing patches and never written into a generated profile.
+const templateNotes = new Set(templateLines.filter(line => line.startsWith('#')).map(line => line.trimEnd()))
+const template = templateLines.filter(line => !templateNotes.has(line.trimEnd())).join('\n').replace(/\n+$/, '\n')
+const ownedIdLine = /^(\s*)(?:-\s+)?id:\s*llm-chatgpt\s*$/
+
+/** Indentation width of `line`, or -1 for a blank line. */
+function columnOf(line) {
+  return line.search(/\S/)
+}
+
+/**
+ * Drop every entry that configures this plugin, at any nesting depth. Appending
+ * a fresh block per install left several same-id entries behind, and the loader
+ * then applied each one as a separate configuration layer.
+ */
+function dropOwnedEntries(lines) {
+  const kept = []
+  for (let index = 0; index < lines.length;) {
+    const marker = ownedIdLine.exec(lines[index])
+    if (marker === null && !templateNotes.has(lines[index].trimEnd())) {
+      kept.push(lines[index])
+      index += 1
+      continue
+    }
+    const indent = marker === null ? columnOf(lines[index]) : marker[1].length
+    index += 1
+    while (index < lines.length) {
+      const column = columnOf(lines[index])
+      if (column !== -1 && column <= indent) break
+      index += 1
+    }
+  }
+  return kept
+}
+
+/** Drop `- insert:` wrappers whose child list became empty. */
+function dropEmptyInserts(lines) {
+  const kept = []
+  for (let index = 0; index < lines.length;) {
+    const header = /^(\s*)-\s*insert:\s*$/.exec(lines[index])
+    if (header === null) {
+      kept.push(lines[index])
+      index += 1
+      continue
+    }
+    const indent = header[1].length
+    let end = index + 1
+    while (end < lines.length) {
+      const column = columnOf(lines[end])
+      if (column !== -1 && column <= indent) break
+      end += 1
+    }
+    const body = lines.slice(index + 1, end)
+    if (body.some(line => /^\s*-\s/.test(line))) kept.push(lines[index], ...body)
+    index = end
+  }
+  return kept
+}
+
+/** Read the configuration rows the previous installs wrote. */
+function readChatgptConfig(lines) {
+  const config = {}
+  for (const line of lines) {
+    const proxy = /^\s*proxyUrl:\s*"([^"]*)"\s*$/.exec(line)
+    if (proxy !== null && config.proxyUrl === undefined) config.proxyUrl = proxy[1]
+    const models = /^\s*extraModels:\s*(\[[^\]]*\])\s*$/.exec(line)
+    if (models === null || config.extraModels !== undefined) continue
+    try { config.extraModels = JSON.parse(models[1]) } catch { /* Unreadable rows cannot merge and are dropped with their entry. */ }
+  }
+  return config
+}
+
+/** Insert the tuned rows into the template, keeping the template as the shape authority. */
+function withConfig(block, config) {
+  const extras = [
+    ...config.proxyUrl === undefined ? [] : [`proxyUrl: ${JSON.stringify(config.proxyUrl)}`],
+    ...config.extraModels === undefined ? [] : [`extraModels: ${JSON.stringify(config.extraModels)}`],
+  ]
+  const lines = block.trimEnd().split('\n')
+  if (extras.length === 0) return `${lines.join('\n')}\n`
+  const anchor = lines.findIndex(line => /^\s*requestTimeoutMs:/.test(line))
+  if (anchor === -1) throw new Error('examples/cordis.patch.yml 缺少 requestTimeoutMs 锚点，未更改 cordis.patch.yml。')
+  const indent = /^\s*/.exec(lines[anchor])[0]
+  lines.splice(anchor + 1, 0, ...extras.map(line => indent + line))
+  return `${lines.join('\n')}\n`
+}
+
+/** Replace the plugin's enable block with one freshly templated entry. */
+function rewritePatch(text, config) {
+  const kept = dropEmptyInserts(dropOwnedEntries(text.split('\n')))
+  while (kept.length > 0 && kept.at(-1).trim() === '') kept.pop()
+  const head = kept.length === 0 ? '' : `${kept.join('\n')}\n\n`
+  return `${head}${withConfig(template, config)}`
+}
 
 try {
   const args = process.argv.slice(2)
@@ -40,10 +136,6 @@ try {
   const originalPatch = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
   // A whole-profile schema may already be incomplete before this plugin exists.
   const baseline = captureSchemaBaseline(run(['--profile', profile, '--dump-config-schema'], { maxBuffer: 16 * 1024 * 1024 }))
-  const installed = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
-  if (installed.dependencies?.['dsh-llm-chatgpt']?.startsWith('file:') && /(?:^|\n)\s*-\s*id:\s*llm-chatgpt\s*(?:\n|$)/.test(originalPatch)) {
-    console.log('检测到已安装的 llm-chatgpt 配置；本次更新包并保留该配置。')
-  }
   const backup = join(directory, '.chatgpt-install-backups', new Date().toISOString().replace(/[:.]/g, '-'))
   mkdirSync(backup, { recursive: true, mode: 0o700 })
   for (const filename of ['package.json', 'cordis.patch.yml', 'pnpm-lock.yaml']) {
@@ -68,18 +160,19 @@ try {
   }
   const currentPatch = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
   if (currentPatch !== originalPatch) throw new Error('安装期间 profile 配置发生变化，请检查后重新运行。')
-  const hasEntry = /(?:^|\n)\s*-\s*id:\s*llm-chatgpt\s*(?:\n|$)/.test(currentPatch)
-  let nextPatch = currentPatch
-  if (!hasEntry) {
-    const addition = readFileSync(join(project, 'examples', 'cordis.patch.yml'), 'utf8')
-    nextPatch = `${currentPatch}${currentPatch.endsWith('\n') || !currentPatch ? '' : '\n'}\n${addition}`
+  const previous = readChatgptConfig(currentPatch.split('\n'))
+  const previousCount = currentPatch.split('\n').filter(line => ownedIdLine.test(line)).length
+  if (previousCount > 0) {
+    console.log(previousCount > 1
+      ? `检测到 ${previousCount} 个重复的 llm-chatgpt 条目；本次合并为一个，保留已设置的配置项。`
+      : '检测到已存在的 llm-chatgpt 配置；本次更新为单个条目，保留已设置的配置项。')
   }
-  if (proxyUrl !== undefined || extraModels !== undefined) {
-    const override = `- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n`
-      + (proxyUrl === undefined ? '' : `    proxyUrl: ${JSON.stringify(proxyUrl)}\n`)
-      + (extraModels === undefined ? '' : `    extraModels: ${JSON.stringify(extraModels)}\n`)
-    if (!nextPatch.endsWith(override)) nextPatch = `${nextPatch}${nextPatch.endsWith('\n') ? '' : '\n'}\n${override}`
-  }
+  const proxy = proxyUrl ?? previous.proxyUrl
+  const models = extraModels === undefined ? previous.extraModels : [...new Set([...(previous.extraModels ?? []), ...extraModels])]
+  const nextPatch = rewritePatch(currentPatch, {
+    ...proxy === undefined || proxy === '' ? {} : { proxyUrl: proxy },
+    ...models === undefined || models.length === 0 ? {} : { extraModels: models },
+  })
   const patchChanged = nextPatch !== currentPatch
   if (patchChanged) writeFileSync(patchFile, nextPatch, { mode: 0o600 })
   let schemaResult

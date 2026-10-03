@@ -65,6 +65,9 @@ test('installed DSH boots the plugin and routes a first-class tool result throug
       assert.equal(url, 'https://api.openai.com/v1/responses')
       const body = JSON.parse(init.body)
       assert.deepEqual(body.input, [{ type: 'function_call_output', call_id: 'call_1', output: 'File content' }])
+      // The real LlmRuntime forwards the session identity; dropping it here once
+      // cost every tool turn its prompt cache hit.
+      assert.equal(body.prompt_cache_key, 'session-installed-integration')
       return response([{ type: 'response.completed', response: { status: 'completed', output: [
         { type: 'message', content: [{ type: 'output_text', text: 'Read the file.' }] },
       ] } }])
@@ -73,9 +76,13 @@ test('installed DSH boots the plugin and routes a first-class tool result throug
     assert.deepEqual(available.map(item => item.id), ['gpt-5.6-sol', 'gpt-6.1-sol'])
     assert.match(available[1].name, /manual; verify access/)
     const chunks = []
-    for await (const chunk of ctx.llm.stream({ provider: 'chatgpt-plan', model: 'test-model', messages: [
-      createToolResultMessage({ callId: 'call_1', content: [{ type: 'text', text: 'File content' }], isError: false }),
-    ] })) chunks.push(chunk)
+    for await (const chunk of ctx.llm.stream({
+      provider: 'chatgpt-plan', model: 'test-model',
+      sessionId: 'session-installed-integration',
+      messages: [
+        createToolResultMessage({ callId: 'call_1', content: [{ type: 'text', text: 'File content' }], isError: false }),
+      ],
+    })) chunks.push(chunk)
     assert.deepEqual(calls, ['https://api.openai.com/v1/models', 'https://api.openai.com/v1/responses'])
     assert.equal(chunks.at(-1).reason.kind, 'stop')
     assert.equal(chunks.find(chunk => chunk.type === 'block-end').block.text, 'Read the file.')

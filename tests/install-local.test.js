@@ -7,6 +7,18 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const installer = fileURLToPath(new URL('../scripts/install-local.mjs', import.meta.url))
+const countEntries = patch => (patch.match(/^\s*-?\s*id: llm-chatgpt\s*$/gm) ?? []).length
+const entryBlock = patch => {
+  const lines = patch.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index] !== '- insert:') continue
+    let end = index + 1
+    while (end < lines.length && !/^\S/.test(lines[end])) end += 1
+    const block = lines.slice(index, end).join('\n')
+    if (/^\s*-?\s*id: llm-chatgpt\s*$/m.test(block)) return block
+  }
+  return ''
+}
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), 'dsh-chatgpt-install-test-'))
@@ -70,5 +82,53 @@ test('installer adds one explicitly named model while preserving the proxy', () 
   assert.match(configured, /proxyUrl: "http:\/\/127\.0\.0\.1:7890"/)
   assert.match(configured, /extraModels: \["gpt-6\.1-sol"\]/)
   assert.equal(current.run({}, args).status, 0)
+  assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
+})
+
+test('installer enables the plugin once and keeps every entry inside one insert block', () => {
+  const current = fixture()
+  const args = ['--proxy', '127.0.0.1:7890', '--model', 'gpt-6.1-sol']
+  assert.equal(current.run({}, args).status, 0)
+  const configured = readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8')
+  assert.equal(countEntries(configured), 1)
+  assert.equal((configured.match(/^- insert:$/gm) ?? []).length, 2)
+  const tuned = entryBlock(configured)
+  assert.match(tuned, /proxyUrl: "http:\/\/127\.0\.0\.1:7890"/)
+  assert.match(tuned, /extraModels: \["gpt-6\.1-sol"\]/)
+  assert.ok(tuned.startsWith('- insert:\n    - id: llm-chatgpt\n'))
+  assert.doesNotMatch(configured, /^# Merge these rows/m)
+  assert.doesNotMatch(configured, /TEST_PRIVATE_VALUE\n- id: llm-chatgpt/)
+})
+
+test('installer collapses repeatedly appended entries into one and keeps their settings', () => {
+  const current = fixture()
+  const stacked = current.original
+    + '\n- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n    proxyUrl: "http://127.0.0.1:7890"\n'
+    + '\n- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n    proxyUrl: "http://127.0.0.1:7890"\n    extraModels: [ "gpt-6.1-sol" ]\n'
+    + '\n- insert:\n    - id: llm-chatgpt\n      name: dsh-llm-chatgpt\n      config:\n        provider: chatgpt-plan\n\n'
+    + '- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n    proxyUrl: "http://127.0.0.1:7890"\n    extraModels: ["gpt-6.1-sol"]\n'
+  writeFileSync(join(current.profile, 'cordis.patch.yml'), stacked)
+  const result = current.run()
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /检测到 4 个重复的 llm-chatgpt 条目/)
+  const configured = readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8')
+  assert.equal(countEntries(configured), 1)
+  assert.ok(configured.startsWith(current.original))
+  assert.match(entryBlock(configured), /provider: chatgpt-plan/)
+  assert.match(entryBlock(configured), /proxyUrl: "http:\/\/127\.0\.0\.1:7890"/)
+  assert.match(entryBlock(configured), /extraModels: \["gpt-6\.1-sol"\]/)
+  assert.doesNotMatch(configured, /extraModels: \[ "gpt-6\.1-sol" \]/)
+  assert.equal(current.run().status, 0)
+  assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
+})
+
+test('installer accumulates explicit models across runs without dropping earlier ones', () => {
+  const current = fixture()
+  assert.equal(current.run({}, ['--model', 'gpt-6.1-sol']).status, 0)
+  assert.equal(current.run({}, ['--model', 'gpt-6-astra']).status, 0)
+  const configured = readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8')
+  assert.equal(countEntries(configured), 1)
+  assert.match(entryBlock(configured), /extraModels: \["gpt-6\.1-sol","gpt-6-astra"\]/)
+  assert.equal(current.run({}, ['--model', 'gpt-6-astra']).status, 0)
   assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
 })

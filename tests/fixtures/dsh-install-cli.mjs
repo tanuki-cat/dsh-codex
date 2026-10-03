@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const args = process.argv.slice(2)
-const patch = args.includes('--version') ? '' : readFileSync(join(process.env.DSH_HOME, 'profiles/web/cordis.patch.yml'), 'utf8')
+const profile = join(process.env.DSH_HOME, 'profiles/web')
+const patch = args.includes('--version') ? '' : readFileSync(join(profile, 'cordis.patch.yml'), 'utf8')
 const active = /id: llm-chatgpt/.test(patch)
 if (args.includes('--version')) console.log('0.2.0-rc.2')
 else if (args.includes('--dump-config')) console.log(active ? 'name: dsh-llm-chatgpt' : 'name: prior-plugin')
@@ -16,4 +17,10 @@ else if (args.includes('--dump-config-schema')) {
   }
   console.log(JSON.stringify({ 'x-cordis': { complete: false, entries, diagnostics } }))
   process.exitCode = 1
+} else if (args.includes('plugin')) {
+  // Model the one effect this installer depends on: the profile ends up with
+  // the version carried by the tarball it asked to add.
+  const version = /dsh-llm-chatgpt-(\d+\.\d+\.\d+)\.tgz$/.exec(args.at(-1) ?? '')?.[1]
+  if (version === undefined) { console.error('Unexpected package operation'); process.exitCode = 2 }
+  else writeFileSync(join(profile, 'node_modules/dsh-llm-chatgpt/package.json'), JSON.stringify({ version }))
 } else { console.error('Unexpected package operation'); process.exitCode = 2 }
