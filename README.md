@@ -2,7 +2,9 @@
 
 将 ChatGPT Plus / Pro 订阅接入 DeepSeek Harness 的独立 LLM 插件。采用官方 [Sign in with ChatGPT 开源客户端流程](https://developers.openai.com/siwc/token-sharing-open-source)，通过 OAuth 授权订阅使用权限，再调用公开 Responses API。DSH 负责工具执行和会话管理。
 
-已通过本地协议测试和本机 DSH 核心服务加载测试，**尚未完成真实账户及浏览器 Web profile 联调**。账户必须具备官方接入资格并授权 ChatGPT plan usage；订阅额度和模型可用性以 OpenAI 返回为准。
+已通过本地协议测试和本机 DSH 核心服务加载测试；本机真实账户已完成 OAuth 授权与一轮真实推理验证（订阅接口返回 HTTP 200，轮内工具往返缓存命中 97.5%）。账户必须具备官方接入资格并授权 ChatGPT plan usage；订阅额度和模型可用性以 OpenAI 返回为准。
+
+> 若只想使用官方实现，DSH 内置的 `@deepseek-ai/dsh-llm-pi-ai` 已包含 pi-ai 的 `openai-codex` provider，无需本插件。区别与登录方法见「与官方 openai-codex 路由的关系」。
 
 ## 功能
 
@@ -10,13 +12,14 @@
 - DSH 凭据服务存储令牌；临近过期时在存储锁内自动刷新。
 - 账户模型列表、流式文本、推理摘要、函数工具调用及工具结果往返。
 - 完整历史和加密推理项重放；缓存 token 与普通输入 token 分开统计。
+- 请求携带会话级 `prompt_cache_key`，使稳定前缀命中订阅接口的提示缓存，而不是每次重算。
 - 登录、账户状态、远程撤销与退出命令。
 - 设置侧栏 ChatGPT 管理页：浏览器登录、自动显示结果、账户状态、可用模型和退出撤销。
 - 可配置 HTTP / HTTPS 代理，用于 OAuth、刷新、模型目录和推理请求。
 
 ## 安装到 DSH
 
-需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.4 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
+需要 Node.js `^22.19.0 || >=24.0.0`（测试环境 22.23.3）和 DSH `0.2.0-rc.2` 或 `0.2.1-alpha.1`。插件 0.2.5 精确声明这两个已核对版本，前者已用本机真实安装依赖验证，后者通过本地源码接口测试验证。Web 管理页使用宿主的 webServer、webRuntime、client-modules、settings.section 与 locale 服务；这些服务由标准 Web profile 提供。命令入口还需 `commands`、`userQuestions` 及其 UI 提供者。
 
 本机现有 `web` profile 可在普通终端执行安装脚本：
 
@@ -38,9 +41,9 @@ node /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/scripts/install-local.mj
 
 此命令只把模型加入选择器，名称标记 `manual; verify access`；它不证明账户已获该模型的订阅调用权限。只有真正完成一次推理请求才能验证。此参数合并到 profile，重启 DSH 后生效。
 
-此参数合并到 profile 的 `llm-chatgpt` 配置，保存后重启 DSH 生效。可以使用 `--proxy ""` 清除显式代理、恢复 DSH 原有网络策略。
+此参数合并到 profile 的 `llm-chatgpt` 配置，保存后重启 DSH 生效。`--model` 可重复运行以累积多个手动模型，已列出的 ID 不会重复写入。可以使用 `--proxy ""` 清除显式代理、恢复 DSH 原有网络策略。
 
-脚本调用 `dsh plugin` 安装当前包，已安装同版本时跳过重复安装；先备份现有 profile 配置，再合并插件配置项并检查组合配置及插件模块导入。Schema 检查比较安装前后的诊断：已有 profile 的导出不完整但本插件没有新增问题时允许继续并明确提示；插件导入失败、新增诊断或命令异常仍会拒绝。它不启动 Web 服务、不调用模型、不进行 ChatGPT 登录。当前 Codex 沙箱不能写入 `~/.dsh`，因此需要从本机终端执行。下面是手动安装步骤。
+脚本调用 `dsh plugin` 安装当前包，已安装同版本时跳过重复安装；先备份现有 profile 配置，再把该插件的配置写成唯一一个条目并检查组合配置及插件模块导入。重复运行不会追加重复条目：脚本会合并此前遗留的多个 `llm-chatgpt` 条目，并保留其中已设置的 `proxyUrl` 与 `extraModels`。Schema 检查比较安装前后的诊断：已有 profile 的导出不完整但本插件没有新增问题时允许继续并明确提示；插件导入失败、新增诊断或命令异常仍会拒绝。它不启动 Web 服务、不调用模型、不进行 ChatGPT 登录。当前 Codex 沙箱不能写入 `~/.dsh`，因此需要从本机终端执行。下面是手动安装步骤。
 
 在本项目目录打包：
 
@@ -53,7 +56,7 @@ npm pack --cache .npm-cache
 将生成的 tarball 安装到自己的 profile，例如已有的 `web` profile：
 
 ```sh
-dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.4.tgz
+dsh plugin --profile web add /Users/wangzy/WorkSpace/WebStormProjects/dsh-codex/dsh-llm-chatgpt-0.2.5.tgz
 ```
 
 新版 DSH base 已提供 `authorization` 服务。只有自定义 profile 缺失该服务时，才需要安装与宿主版本一致的 `@deepseek-ai/dsh-authorization` 并添加对应配置项。不要引入不同版本的 DSH 核心服务。
@@ -130,5 +133,34 @@ DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 本机验证覆盖 DSH 源码、真实已安装的 DSH 依赖、管理路由、index 注入、安装配置合并及失败回滚、浏览器管理模块与代理传输。真实依赖测试实例化宿主 ProxyAgent 并验证其传入推理请求；代理与外部服务的网络连接仍使用模拟响应。浏览器 UI 的注册、弹窗行为和状态控制器使用模拟环境验证，尚无真实 OAuth 联调结果。
 
 首次联调应确认：插件无依赖注入缺失；登录后显示成功；模型目录返回；一轮真实回答完成；DSH 工具调用完成并发送结果；重启后仍能读取凭据；退出能够撤销会话。网络受限环境下，本项目未安装宿主依赖，也未执行上述真实联调。
+
+## 与官方 openai-codex 路由的关系
+
+DSH 已内置官方实现：`@deepseek-ai/dsh-llm-pi-ai` 直接引入 `@earendil-works/pi-ai`，其 41 个 provider 中包含 `openai-codex`，自带 8 个 Codex 模型（`gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` / `gpt-5.5` / `gpt-6-astra` / `gpt-6-sol` / `gpt-6-luna` / `gpt-5.3-codex-spark`）、WebSocket 传输、图片输入与成本档位。两条路由可以并行使用，互不影响。
+
+| 能力 | 官方 `openai-codex` | 本插件 `chatgpt-plan` |
+| --- | --- | --- |
+| 协议实现 | pi-ai（1302 行） | 本仓库 `src/wire.js` |
+| 提示缓存亲和 | 内置 `prompt_cache_key` | 0.2.5 起支持 |
+| 图片输入 / WebSocket | 支持 | 不支持（明确拒绝图片） |
+| 模型目录 | 静态 8 个，含成本档位 | 账户 `/v1/models` + 手动条目 |
+| 登录入口 | **无 UI 入口**，见下 | 设置页 + `/chatgpt-plan-login` |
+| 设置页与中文界面 | 无 | 有 |
+
+官方路由的 OAuth 流程已注册到 DSH 授权服务，但宿主没有任何界面调用它：Models 设置页的 `settings.models.sign-in` 槽位属于 DeepSeek 账号，`settings.models.provider-card` 槽位没有注册者。因此需要本仓库的两个脚本：
+
+```sh
+# 1. 完成 OAuth 并写入凭据 llm-pi-ai/openai-codex
+node scripts/login-openai-codex.mjs
+
+# 2. 在 profile 的 llm-pi-ai providers 下声明 openai-codex 路由（幂等）
+node scripts/add-openai-codex-route.mjs
+```
+
+`login-openai-codex.mjs` 直接驱动 pi-ai 的 `openaiCodexOAuth`，并把凭据通过 DSH 同一把跨进程文件锁写入 `$DSH_HOME/.credentials.yaml`，运行中的 DSH 会热加载。它读取 `https_proxy` 等环境变量，环境缺失时回退到 `$DSH_HOME/.env`。
+
+`add-openai-codex-route.mjs` 必需，因为 pi-ai 适配器只注册 profile 中已声明的路由（`routes = [...profiles().keys()]`）；未声明的 provider 即使已登录也无法选择。路由不设 `apiKeyEnv`，以便存储的 OAuth 凭据完成鉴权。
+
+官方推理端点是 `https://chatgpt.com/backend-api/codex/responses`（不是 `/v1/responses`），并携带 `chatgpt-account-id` 与 `originator` 请求头。
 
 实施范围见 [设计文档](docs/design-task-add-chatgpt-subscription-plugin.md)。

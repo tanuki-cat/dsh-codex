@@ -99,6 +99,18 @@
 
 验证：`npm test` 71 个测试通过（含新增的客户端页面测试）；`DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test` 71 个测试通过、无跳过。客户端测试用模拟模块加载器渲染真实 factory，覆盖样式表注入与 token 契约、无内联样式、已连接 / 未连接 / 接口失败三种页面的文案与控件集合、登录开窗与 popup 回退。另用本机无头浏览器加载独立预览页截图核对浅色、深色、等待授权、未连接与代理失败五种状态，均无控制台异常；该预览不是 DSH 设置面板本身，真实 Web profile 中的显示仍需重启后人工确认。
 
+## 提示缓存亲和与安装幂等（0.2.5）
+
+插件升至 0.2.5。
+
+订阅接口按请求体内的 `prompt_cache_key` 做缓存与路由亲和。插件此前不发送该字段，在 `chatgpt-plan` 路由上的表现是：用 `requestBody` 重放本机会话后确认相邻请求正文的公共前缀等于上一请求全长（前缀逐字节稳定），但间隔十几秒的连续请求仍整段未命中，命中量在 0 / 12k / 25k / 64k 之间跳变。同机同期其他路由命中率为 97–99%，该路由为 45.3%（22 步共 572,745 输入 token，命中 474,112）。官方客户端在同一路由每次请求都发送 `prompt_cache_key`，取值是 DSH 注入的 `options.sessionId`，并截断到 64 个字符。
+
+`requestBody` 因此增加同名顶层字段：`sessionId` 存在且非空时发送其前 64 个字符（按码点截断），否则完全不发送该字段，不发送空 key。不发送 `prompt_cache_options` / `prompt_cache_retention`，与官方该路由保持一致。
+
+安装脚本由"追加"改为"替换"。此前每次安装都向 `cordis.patch.yml` 追加一个 `- id: llm-chatgpt` 块（`--proxy` 与 `--model` 各追加一次），同一 id 出现多个条目；加载器按条目顺序把每一个都当作独立配置层叠加，同时配置里还被写入模板的 `# Merge these rows...` 手动安装说明。现在脚本删除该插件在任意嵌套深度已有的条目、清理因此变空的 `- insert:` 包装、丢弃模板注释行，再按 `examples/cordis.patch.yml` 的形状写入唯一一个条目，并继承上一次的 `proxyUrl` / `extraModels`（`extraModels` 按值去重累积）。重复运行结果逐字节稳定。
+
+验证：`npm test` 75 个测试通过、1 个跳过（未设置 `DSH_INSTALL_ROOT` 的安装依赖测试），另用 `DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh` 单独跑通该集成测试，真实 `LlmRuntime` 转发的 `sessionId` 已断言落在 `prompt_cache_key` 上。安装脚本用用户真实 `cordis.patch.yml` 的副本演练：4 个重复条目合并为 1 个，原有内容与已设置的代理、手动模型全部保留。真实账户的缓存命中率回升仍需重新登录后实测。
+
 ## 验证与验收
 
 使用 node:test 对真实 OAuth / JWT / wire / SSE / 刷新代码进行测试，模拟外部 OpenAI 返回值，验证错误、取消、截断和工具往返。通过 npm pack dry-run 检查交付内容。真实订阅资格、OAuth 服务开放、宿主实际加载及请求计费必须进行真实账户联调；未进行时明确标注，不将模拟测试作为接入成功。
@@ -110,3 +122,4 @@
 - https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference
 - https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations
 - 本地 DSH `packages/llm/llm/src/types.ts`、`packages/credentials/credentials/src/index.ts`、`packages/credentials/authorization/src/index.ts`
+- 官方客户端缓存键实现：`@earendil-works/pi-ai` 的 `api/openai-codex-responses.js`、`api/openai-prompt-cache.js`
