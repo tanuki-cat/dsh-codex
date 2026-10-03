@@ -1,0 +1,28 @@
+{
+  "name": "dsh-llm-chatgpt",
+  "version": "0.2.2",
+  "description": "ChatGPT subscription provider for DeepSeek Harness using Sign in with ChatGPT",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": { ".": "./src/index.js", "./client": "./src/client.js" },
+  "dsh": {
+    "manifestVersion": 1,
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-locale"]
+    }
+  },
+  "files": ["src", "examples", "README.md", "LICENSE", "docs"],
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check src/index.js && node --check src/auth.js && node --check src/wire.js && node --check src/http.js && node --check src/management.js && node --check src/client.js && node --check src/proxy.js"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1",
+    "@deepseek-ai/dsh-credentials": "0.2.0-rc.2 || 0.2.1-alpha.1",
+    "undici": "^8.11.2"
+  },
+  "peerDependenciesMeta": { "undici": { "optional": true } },
+  "license": "MIT"
+}

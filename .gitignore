@@ -1,0 +1,8 @@
+node_modules/
+*.tgz
+.npm-cache/
+.credentials*
+.env
+.env.*
+!.env.example
+.DS_Store

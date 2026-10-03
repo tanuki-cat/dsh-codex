@@ -1,0 +1,9 @@
+# Merge these rows into your profile's existing cordis.patch.yml.
+# DSH 0.2.1-alpha.1 base already provides the authorization service.
+- insert:
+    - id: llm-chatgpt
+      name: dsh-llm-chatgpt
+      config:
+        provider: chatgpt-plan
+        callbackPort: 0
+        requestTimeoutMs: 600000
