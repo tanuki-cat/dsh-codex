@@ -1,19 +1,31 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const args = process.argv.slice(2)
 const profile = join(process.env.DSH_HOME, 'profiles/web')
-const patch = args.includes('--version') ? '' : readFileSync(join(profile, 'cordis.patch.yml'), 'utf8')
-const active = /id: llm-chatgpt/.test(patch)
+
+/**
+ * Whether this profile carries an installed copy of the plugin.
+ *
+ * The plugin declares no cordis.patch.yml entry, so the installed package is
+ * what "installed" means — which is also what the real dsh reports.
+ */
+function installed() {
+  const manifest = join(profile, 'node_modules/dsh-llm-chatgpt/package.json')
+  return existsSync(manifest)
+}
+
 if (args.includes('--version')) console.log('0.2.0-rc.2')
-else if (args.includes('--dump-config')) console.log(active ? 'name: dsh-llm-chatgpt' : 'name: prior-plugin')
+else if (args.includes('--dump-config')) console.log(installed() ? 'name: dsh-llm-chatgpt' : 'name: prior-plugin')
 else if (args.includes('--dump-config-schema')) {
   const entries = [{ path: '/0', id: 'prior-plugin', name: 'prior-plugin', status: 'partial' }]
   const diagnostics = [{ path: '/0', level: 'warning', message: 'Existing projection limitation' }]
-  if (active) {
-    entries.push({ path: '/1', id: 'llm-chatgpt', name: 'dsh-llm-chatgpt', status: process.env.TEST_SCHEMA_PLUGIN_ERROR ? 'error' : 'absent' })
-    if (process.env.TEST_SCHEMA_PLUGIN_ERROR) diagnostics.push({ path: '/1', level: 'error', message: 'Plugin import failed' })
+  // Only a failed import produces an entry under the plugin's id; a healthy
+  // install declares no schema at all.
+  if (installed() && process.env.TEST_SCHEMA_PLUGIN_ERROR) {
+    entries.push({ path: '/1', id: 'llm-chatgpt', name: 'dsh-llm-chatgpt', status: 'error' })
+    diagnostics.push({ path: '/1', level: 'error', message: 'Plugin import failed' })
   }
   console.log(JSON.stringify({ 'x-cordis': { complete: false, entries, diagnostics } }))
   process.exitCode = 1

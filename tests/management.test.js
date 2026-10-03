@@ -1,82 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
-import { grant, store } from './helpers.js'
+import { store } from './helpers.js'
 
 // The management surface imports the codex adapter, which addresses credential
 // records through the host's key grammar; that one import is doubled here.
 const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === '@deepseek-ai/dsh-credentials') {
-    return { url: `data:text/javascript,${encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id")}`, shortCircuit: true }
+    return { url: 'data:text/javascript,' + encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id"), shortCircuit: true }
   }
   return next(specifier, context)
 } })
-const { createManagement, registerManagement, trustedManagementRequest } = await import('../src/management.js')
+const { registerCodexManagement, trustedManagementRequest } = await import('../src/management.js')
 hooks.deregister()
-
-const key = 'llm-chatgpt/chatgpt-plan'
-function managementHost() {
-  const storage = store()
-  let pending
-  const ctx = {
-    credentials: storage,
-    authorization: {
-      describe() { return { inFlight: Boolean(pending) } },
-      begin({ signal, interaction }) {
-        interaction.notify({ url: 'http://127.0.0.1:1455/login' })
-        return new Promise(resolve => {
-          pending = { async finish() {
-            await storage.modifyRecord(key, async () => ({ kind: 'grant', payload: grant({ email: 'test@example.com' }) }))
-            pending = undefined; resolve({ status: 'authorized' })
-          }, cancel() { pending = undefined; resolve({ status: 'cancelled' }) } }
-          signal.addEventListener('abort', () => pending?.cancel(), { once: true })
-        })
-      },
-      cancel() { pending?.cancel() },
-    },
-  }
-  const manager = createManagement(ctx, key, { async listModels() { return [{ id: 'test-model', name: 'Test model' }] } }, {
-    provider: 'chatgpt-plan', callbackPort: 0, requestTimeoutMs: 600_000,
-  })
-  return { manager, ctx, complete: () => pending.finish() }
-}
-
-test('management login finishes automatically and returns only public account facts', async () => {
-  const host = managementHost()
-  assert.equal((await host.manager.status()).connected, false)
-  assert.deepEqual(await host.manager.start(), { loginUrl: 'http://127.0.0.1:1455/login' })
-  assert.throws(() => host.manager.start(), /already running/)
-  await host.complete()
-  await new Promise(resolve => setImmediate(resolve))
-  const status = await host.manager.status()
-  assert.equal(status.connected, true)
-  assert.equal(status.state, 'authorized')
-  assert.equal(status.email, 'test@example.com')
-  for (const token of ['test-access', 'test-refresh', 'idToken']) assert.equal(JSON.stringify(status).includes(token), false)
-  assert.equal(status.loginUrl, undefined)
-  assert.equal((await host.manager.models())[0].id, 'test-model')
-  await host.manager.dispose()
-})
-
-test('management cancellation and disposal do not authorize an account', async () => {
-  const host = managementHost()
-  await host.manager.start()
-  await host.manager.cancel()
-  assert.equal((await host.manager.status()).state, 'cancelled')
-  assert.equal((await host.manager.status()).connected, false)
-  await host.manager.start()
-  await host.manager.dispose()
-  assert.throws(() => host.manager.start(), /closed/)
-})
-
-test('management sign-out cancels pending login before clearing the account', async () => {
-  const host = managementHost()
-  await host.manager.start()
-  await host.manager.signOut(async () => {
-    assert.equal(host.ctx.authorization.describe().inFlight, false)
-  })
-  assert.equal((await host.manager.status()).state, 'idle')
-})
 
 test('management protects against wrong capability, cross-site origins and DNS rebinding', () => {
   const request = (host, token = 'secret', origin, site) => ({ headers: { host, 'x-dsh-chatgpt-token': token, origin, 'sec-fetch-site': site } })
@@ -89,22 +25,40 @@ test('management protects against wrong capability, cross-site origins and DNS r
   assert.equal(trustedManagementRequest(request('192.168.1.2:9090'), 'secret', ['192.168.1.2:8080']), false)
 })
 
-test('management routes require the injected capability and POST for account changes', async () => {
+test('management routes require the injected capability and POST for state changes', async () => {
   let route, inject, cleanup
-  const host = managementHost()
+  let pending
+  const ctx = {
+    credentials: store(),
+    authorization: {
+      describe() { return { inFlight: Boolean(pending) } },
+      // A never-settling attempt, like a real one waiting for the browser. The
+      // management surface must answer while it is still outstanding.
+      begin() { pending = {}; return new Promise(() => {}) },
+      cancel() { pending = undefined },
+    },
+  }
+  const manager = {
+    // The real manager answers `start()` with the status of the attempt it just
+    // launched, so the page renders "pending" without waiting for the browser.
+    async status() { return { state: pending ? 'pending' : 'idle', available: true, connected: false } },
+    async start() { ctx.authorization.begin(); return manager.status() },
+    async cancel() { ctx.authorization.cancel(); return manager.status() },
+    async signOut() { return manager.status() },
+    async dispose() {},
+  }
   const web = {
     webRuntime: { trustedHosts: [] },
     webServer: { register(value) { route = value; return () => {} } },
     on(_event, callback) { inject = callback },
     effect(callback) { cleanup = callback() },
   }
-  registerManagement(web, host.manager, 'chatgpt-plan', async () => {})
+  registerCodexManagement(web, manager)
   const table = []
   inject(table)
-  const script = table[0]
-  assert.equal(script.kind, 'script')
-  assert.equal(script.placement, 'head')
-  const token = /"token":"([a-f0-9]+)"/.exec(script.text)[1]
+  assert.equal(table[0].kind, 'script')
+  assert.equal(table[0].placement, 'head')
+  const token = /"token":"([a-f0-9]+)"/.exec(table[0].text)[1]
   async function request(operation, method, capability = token) {
     let code, body
     await route.handler({ url: route.path + operation, method, headers: { host: '127.0.0.1:8080', 'x-dsh-chatgpt-token': capability } }, {
@@ -114,8 +68,8 @@ test('management routes require the injected capability and POST for account cha
   }
   assert.equal((await request('/status', 'GET', 'wrong')).code, 403)
   assert.equal((await request('/login', 'GET')).code, 405)
-  assert.equal((await request('/status', 'GET')).body.connected, false)
-  assert.equal((await request('/login', 'POST')).body.loginUrl, 'http://127.0.0.1:1455/login')
-  assert.equal((await request('/cancel', 'POST')).body.state, 'cancelled')
+  assert.equal((await request('/status', 'GET')).body.available, true)
+  assert.equal((await request('/login', 'POST')).body.state, 'pending')
+  assert.equal((await request('/cancel', 'POST')).body.state, 'idle')
   await cleanup()
 })

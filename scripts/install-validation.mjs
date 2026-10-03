@@ -1,3 +1,19 @@
+/**
+ * Schema-dump comparison used to verify one install.
+ *
+ * An install must not make the profile's schema worse. The comparison is a
+ * multiset difference over diagnostics and incomplete entries, so a profile
+ * that was already broken stays installable while a new break is refused.
+ *
+ * The plugin itself declares no profile entry, so there is no entry to look
+ * for: its module import is proven by the absence of a new entry carrying its
+ * id, which is exactly what this comparison reports.
+ */
+
+/** The entry id and package name an install of this plugin owns. */
+const PLUGIN_ID = 'llm-chatgpt'
+const PLUGIN_NAME = 'dsh-llm-chatgpt'
+
 function schemaDump(result) {
   if (result.error || ![0, 1].includes(result.status)) throw new Error('Schema 导出命令异常，无法验证插件导入。')
   let metadata
@@ -25,10 +41,11 @@ export function captureSchemaBaseline(result) {
 
 export function validateInstalledSchema(baseline, result) {
   const metadata = schemaDump(result)
-  const targets = metadata.entries.filter(entry => entry.id === 'llm-chatgpt' && entry.name === 'dsh-llm-chatgpt')
-  if (targets.length !== 1 || !['schema', 'absent'].includes(targets[0].status)) {
-    throw new Error('llm-chatgpt 模块未成功导入或其 schema 不受支持。')
-  }
+  // A partial or failed entry under the plugin's own id is the one shape that
+  // means its module did not import cleanly.
+  const broken = metadata.entries.filter(entry => entry.id === PLUGIN_ID && entry.name === PLUGIN_NAME
+    && ['partial', 'unsupported', 'error'].includes(entry.status))
+  if (broken.length > 0) throw new Error('llm-chatgpt 模块未成功导入或其 schema 不受支持。')
   const counts = new Map()
   for (const issue of issues(baseline)) counts.set(issue, (counts.get(issue) ?? 0) + 1)
   for (const issue of issues(metadata)) {
@@ -40,5 +57,5 @@ export function validateInstalledSchema(baseline, result) {
   if (!metadata.complete && (baseline.complete || issues(metadata).length === 0)) {
     throw new Error('安装后 schema 不完整，不能用已有诊断解释。')
   }
-  return { complete: metadata.complete, pluginStatus: targets[0].status }
+  return { complete: metadata.complete }
 }

@@ -1,7 +1,7 @@
 {
   "name": "dsh-llm-chatgpt",
-  "version": "0.2.7",
-  "description": "ChatGPT subscription provider for DeepSeek Harness using Sign in with ChatGPT",
+  "version": "0.3.0",
+  "description": "Settings-page sign-in for the official openai-codex route in DeepSeek Harness",
   "type": "module",
   "main": "./src/index.js",
   "exports": { ".": "./src/index.js", "./client": "./src/client.js" },
@@ -12,17 +12,15 @@
       "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-locale"]
     }
   },
-  "files": ["src", "examples", "README.md", "LICENSE", "docs"],
+  "files": ["src", "README.md", "LICENSE", "docs"],
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/index.js && node --check src/auth.js && node --check src/wire.js && node --check src/http.js && node --check src/management.js && node --check src/client.js && node --check src/proxy.js && node --check src/model-catalog.js && node --check src/codex.js"
+    "check": "node --check src/index.js && node --check src/codex.js && node --check src/management.js && node --check src/client.js"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2 || 0.2.1-alpha.1",
     "@deepseek-ai/dsh-credentials": "0.2.0-rc.2 || 0.2.1-alpha.1",
-    "undici": "^8.11.2"
+    "@deepseek-ai/dsh-authorization": "0.2.0-rc.2 || 0.2.1-alpha.1"
   },
-  "peerDependenciesMeta": { "undici": { "optional": true } },
   "license": "MIT"
 }

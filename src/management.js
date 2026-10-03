@@ -1,5 +1,13 @@
+/**
+ * The token-guarded HTTP surface the settings page drives.
+ *
+ * It exposes one flow — the official openai-codex sign-in — as plain
+ * request/response operations, so the page polls state instead of holding a
+ * stream open. The capability token and origin checks are the same ones any
+ * local management route needs; nothing here reaches a provider.
+ * @module dsh-llm-chatgpt/management
+ */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { readRegistration } from './auth.js'
 import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
@@ -79,70 +87,18 @@ export function createCodexManagement(ctx) {
   }
 }
 
-export function createManagement(ctx, key, adapter, config) {
-  let current = { state: 'idle', loginUrl: undefined, error: undefined }
-  let active
-  let closed = false
-  const publicError = error => error?.name === 'AbortError' ? 'Login cancelled.' : 'ChatGPT connection failed. Check your connection and account permissions, then try again.'
-  async function status() {
-    const record = await ctx.credentials.readRecord(key)
-    const account = record ? readRegistration(record) : undefined
-    return {
-      ...current, ...config,
-      connected: Boolean(account?.accessToken && account?.refreshToken),
-      email: account?.email,
-    }
-  }
-  function start() {
-    if (closed) throw new Error('ChatGPT management is closed.')
-    if (active || ctx.authorization.describe(key)?.inFlight) throw new Error('A ChatGPT login is already running.')
-    const controller = new AbortController()
-    let readyResolve, readyReject
-    const ready = new Promise((ok, fail) => { readyResolve = ok; readyReject = fail })
-    current = { state: 'pending', loginUrl: undefined, error: undefined }
-    const attempt = { controller, job: undefined }
-    active = attempt
-    attempt.job = Promise.resolve().then(() => ctx.authorization.begin({ key, signal: controller.signal, interaction: {
-      notify(notice) {
-        if (active !== attempt || !notice.url) return
-        const url = new URL(notice.url)
-        if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/login') {
-          readyReject(new Error('Unexpected login URL.'))
-          controller.abort()
-          return
-        }
-        current = { state: 'pending', loginUrl: notice.url, error: undefined }
-        readyResolve({ loginUrl: notice.url })
-      },
-      async prompt() { throw new Error('Unexpected ChatGPT prompt.') },
-    } })).then(outcome => {
-      if (active === attempt) current = { state: outcome.status === 'authorized' ? 'authorized' : 'cancelled', loginUrl: undefined, error: undefined }
-      readyReject(new Error('Login ended before opening the browser.'))
-    }, error => {
-      if (active === attempt) current = { state: 'failed', loginUrl: undefined, error: publicError(error),
-        errorCode: error?.code === 'TRANSPORT' && config.proxyUrl ? 'PROXY_CONNECTION' : 'CONNECTION' }
-      readyReject(new Error(publicError(error)))
-    }).finally(() => { if (active === attempt) active = undefined })
-    return ready
-  }
-  async function cancel() {
-    active?.controller.abort()
-    ctx.authorization.cancel(key)
-    await active?.job
-    if (current.state === 'pending') current = { state: 'cancelled', loginUrl: undefined, error: undefined }
-  }
-  return {
-    status, start, cancel,
-    async models() { return adapter.listModels(config.provider) },
-    async signOut(logout) {
-      await cancel()
-      await logout()
-      current = { state: 'idle', loginUrl: undefined, error: undefined }
-    },
-    async dispose() { closed = true; await cancel() },
-  }
-}
-
+/**
+ * Whether one request may reach a management route.
+ *
+ * Two independent proofs: a capability token the index injection handed this
+ * browser, and an authority that is loopback or explicitly trusted. A page on
+ * another origin cannot satisfy both, and a DNS-rebinding hostname fails the
+ * authority check even when the token leaked.
+ * @param req - the incoming request.
+ * @param token - the capability this endpoint was registered with.
+ * @param trustedHosts - additional authorities accepted beside loopback.
+ * @returns whether the request is trusted.
+ */
 export function trustedManagementRequest(req, token, trustedHosts = []) {
   const host = req.headers.host
   const authorization = req.headers['x-dsh-chatgpt-token']
@@ -167,16 +123,28 @@ export function trustedManagementRequest(req, token, trustedHosts = []) {
   } catch { return false }
 }
 
-/** Publish one management endpoint's path and token to the browser. */
-function injectConnection(ctx, id, path, token) {
+/**
+ * Serve the official openai-codex sign-in to the settings page.
+ *
+ * The endpoint is registered only where the flow exists, so the page never
+ * offers a button that cannot work.
+ * @param ctx - the plugin context carrying webServer and webRuntime.
+ * @param manager - the codex management state machine.
+ * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.
+ */
+export function registerCodexManagement(ctx, manager) {
+  const token = randomBytes(32).toString('hex')
+  const path = `/chatgpt-management/${CODEX_PROVIDER}`
   ctx.on('webserver/index-inject', table => {
     // A computed index script merges instances without exposing OAuth credentials.
-    table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [id]: { path, token } })});` })
+    table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [CODEX_PROVIDER]: { path, token } })});` })
   })
-}
-
-/** Serve one management endpoint's operations under a token-guarded prefix. */
-function serve(ctx, path, token, routes) {
+  const routes = {
+    '/status': { method: 'GET', run: () => manager.status() },
+    '/login': { method: 'POST', run: () => manager.start() },
+    '/cancel': { method: 'POST', run: () => manager.cancel() },
+    '/logout': { method: 'POST', run: () => manager.signOut() },
+  }
   const dispose = ctx.webServer.register({ kind: 'prefix', path, async handler(req, res) {
     res.setHeader('cache-control', 'no-store')
     res.setHeader('content-type', 'application/json; charset=utf-8')
@@ -191,44 +159,5 @@ function serve(ctx, path, token, routes) {
       reply(400, { error: 'ChatGPT operation failed. Check your connection and account permissions, then retry.' })
     }
   } })
-  return dispose
-}
-
-export function registerManagement(ctx, manager, provider, logout) {
-  const token = randomBytes(32).toString('hex')
-  const path = `/chatgpt-management/${provider}`
-  injectConnection(ctx, provider, path, token)
-  const dispose = serve(ctx, path, token, {
-    '/status': { method: 'GET', run: () => manager.status() },
-    '/models': { method: 'GET', run: async () => ({ models: await manager.models() }) },
-    '/login': { method: 'POST', run: () => manager.start() },
-    // Both mutations answer with the resulting status: the page renders from
-    // one shape whichever operation it called.
-    '/cancel': { method: 'POST', run: async () => { await manager.cancel(); return manager.status() } },
-    '/logout': { method: 'POST', run: async () => { await manager.signOut(logout); return manager.status() } },
-  })
-  ctx.effect(() => () => { dispose(); return manager.dispose() }, 'chatgpt management routes')
-}
-
-/**
- * Serve the official openai-codex sign-in to the settings page.
- *
- * Separate from the chatgpt-plan endpoint because it authorizes a different
- * record under a different adapter family; the page renders it on the
- * llm-pi-ai provider card, where that route's own settings live.
- * @param ctx - the plugin context carrying webServer and webRuntime.
- * @param manager - the codex management state machine.
- * @returns nothing; both the endpoint and its index injection are owned by the caller's fiber.
- */
-export function registerCodexManagement(ctx, manager) {
-  const token = randomBytes(32).toString('hex')
-  const path = `/chatgpt-management/${CODEX_PROVIDER}`
-  injectConnection(ctx, CODEX_PROVIDER, path, token)
-  const dispose = serve(ctx, path, token, {
-    '/status': { method: 'GET', run: () => manager.status() },
-    '/login': { method: 'POST', run: () => manager.start() },
-    '/cancel': { method: 'POST', run: () => manager.cancel() },
-    '/logout': { method: 'POST', run: () => manager.signOut() },
-  })
   ctx.effect(() => () => { dispose(); return manager.dispose() }, 'codex management routes')
 }

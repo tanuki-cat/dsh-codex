@@ -124,6 +124,52 @@ openai-codex:
 
 验收：模型选择器只保留 `openai-codex` 路由，重启后无诊断。
 
+## 方案 A 完成：删除旧 provider（0.3.0）
+
+登录入口稳定后，旧 `chatgpt-plan` provider 已整体移除，插件收缩为纯界面扩展。
+
+### 删除
+
+| 文件 | 行数 | 原职责 |
+| --- | --- | --- |
+| `src/wire.js` | 227 | Responses 协议与 SSE 转换 |
+| `src/auth.js` | 238 | 自建 OAuth、PKCE、JWT 校验、令牌刷新 |
+| `src/http.js` | 36 | 端点常量与 fetch 封装 |
+| `src/proxy.js` | 51 | 插件私有 undici 代理传输 |
+| `src/model-catalog.js` | 45 | 手动模型与推理等级目录 |
+| `src/management.js` 的 chatgpt-plan 部分 | ~65 | 订阅管理状态机与路由 |
+| `src/client.js` 的订阅页 | ~200 | settings.section 页面 |
+| `examples/cordis.patch.yml` | 9 | profile 配置项（插件不再需要） |
+
+`src/` 由约 1100 行降至 503 行。同时删除 6 个只为已移除模块存在的测试文件（`auth`、`wire`、`proxy`、`model-catalog`、`dsh-source`、`installed-dsh`）。
+
+### 保留
+
+- `src/codex.js`：定位官方 flow、驱动登录、读取账户。
+- `src/management.js`：单一受 token 保护的端点与来源校验。
+- `src/client.js`：注册到 `settings.models.provider-card` 的登录卡片。
+- `src/index.js`：仅在 flow 存在时注册端点。
+
+### 影响
+
+- 插件不再向 `llm` 注册任何路由，`inject` 由 `['llm', 'credentials', 'authorization']` 收缩为 `['credentials', 'authorization']`。
+- 历史会话中选中 `chatgpt-plan` 的那一个无法继续发送消息（`LlmRuntime` 报 `no adapter registered for provider`）；历史内容保留，切换到 `openai-codex` 即可继续。本机受影响会话为 `session-c3b34d90`，已确认放弃。
+- `gpt-6.1-sol` 手动模型条目一并舍弃：官方 catalog 不含它，等待官方目录覆盖。
+- 安装脚本不再接受 `--proxy` / `--model`，改为移除早期版本遗留的配置项。
+
+### 验证
+
+`npm test`：32 个测试，未设 `DSH_INSTALL_ROOT` 时 30 通过 2 跳过；设置后 32 全部通过。
+
+- `tests/plugin.test.js` 重写：断言插件不注册任何 provider 路由，且无 flow 时连管理端点也不注册。
+- `tests/client.test.js` 重写：断言卡片只在 `openai-codex` 行渲染（`llama-cpp`、`command-code` 两行必须为 null）、无 flow 时整卡隐藏。
+- `tests/install-local.test.js` 重写：断言遗留配置项被移除、空 `insert` 包装被清理、验证失败时恢复原 patch。
+- `tests/install-validation.test.js` 重写：插件不再声明 profile 条目，改为「插件 id 下出现 partial/unsupported/error 条目」才算导入失败。
+
+### 仍未验证
+
+- 真实浏览器点击完成一次 OAuth（需要人工操作）。
+
 ## 方案 A 实施结果（0.2.6，渲染修复于 0.2.7）
 
 阶段一已实施：插件现在自带官方 `openai-codex` 的登录入口。
@@ -143,7 +189,7 @@ openai-codex:
 
 - **不实现协议**：登录完全交给 pi-ai 自己的 `openaiCodexOAuth`，凭据由 pi-ai 的 store 经 `credentials.modifyRecord` 写入，因此宿主的 `observed.committed` 能正确观测到提交，`begin()` 正常返回 `authorized`。
 - **按 flow 是否存在决定是否注册**：没有 llm-pi-ai 的组合不注册该端点，前端因此不会显示一个必然失败的按钮。
-- **两条路由互不影响**：`chatgpt-plan` 的管理页与 `openai-codex` 的卡片各自独立，插件可并行服务两条路由。
+- **两条路由曾短暂并行**：`chatgpt-plan` 的管理页与 `openai-codex` 的卡片互相独立；前者已在 0.3.0 随协议实现一并移除。
 - **账户展示不泄漏令牌**：只解出 JWT 的 plan / name / email / 到期时间；测试断言响应中不含 access、refresh 或签名片段。
 
 ### 验证

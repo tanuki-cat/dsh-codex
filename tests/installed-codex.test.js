@@ -101,8 +101,9 @@ test('installed DSH omits the openai-codex surface when no flow is registered', 
     for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer, WebRuntime]) fibers.push(ctx.plugin(service))
     fibers.push(ctx.plugin(plugin, {}))
     await new Promise(resolve => setImmediate(resolve))
-    assert.ok(routes.has('/chatgpt-management/chatgpt-plan'))
-    assert.equal(routes.has('/chatgpt-management/openai-codex'), false)
+    // The plugin now owns one endpoint at most; the chatgpt-plan surface went
+    // with the protocol implementation it served.
+    assert.equal(routes.size, 0)
   } finally {
     for (const fiber of fibers.reverse()) await fiber.dispose()
     hooks.deregister()

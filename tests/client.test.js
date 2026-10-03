@@ -55,9 +55,8 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
   // doubles are reachable both bare and through `globalThis`.
   const sandbox = {
     __DSH_CHATGPT_MANAGEMENT__: {
-      'chatgpt-plan': { path: '/chatgpt-management/chatgpt-plan', token: 'capability' },
-      // The official route's own endpoint, published only when the host
-      // reports that llm-pi-ai offers its sign-in flow.
+      // The official route's endpoint, published only when the host reports
+      // that llm-pi-ai offers its sign-in flow.
       'openai-codex': { path: '/chatgpt-management/openai-codex', token: 'codex-capability' },
     },
     document, AbortController, ...environment,
@@ -72,54 +71,31 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
   return {
     module,
     /**
-     * Mount the registered settings page and render its account section.
+     * Seat the card on the llm-pi-ai provider row and render it.
      *
-     * The module also seats a card on the llm-pi-ai provider row; that slot is
-     * collected here so a test can mount it, and its absence from the rendered
-     * settings page is asserted by the tests that use this harness.
+     * The owner hands the seat every row of the family, so the route id
+     * travels with the owner props exactly as ModelsSection dispatches it.
      */
-    seats,
-    mount() {
-      let entry, component, translations
+    mount(route = 'openai-codex') {
+      let seat, translations
       const ctx = {
         locale: { register(_ns, value) { translations = value; return () => {} }, bind() { return key => translations.zh[key] } },
         effect(callback) { callback() },
         slots: {
-          inject(name, callback) { assert.ok(['settings.section', 'settings.models.provider-card'].includes(name), name); callback() },
-          register(value, view) {
-            if (value.name === 'settings.models.provider-card') { seats.set(value.key, { entry: value, component: view }); return }
-            entry = value; component = view
-          },
+          inject(name, callback) { assert.equal(name, 'settings.models.provider-card'); callback() },
+          register(value, view) { seats.set(value.key, { entry: value, component: view }) },
         },
       }
       module.apply(ctx)
-      const page = component(entry.inject())
-      const account = nodes(page).find(node => typeof node.type === 'function')
-      assert.ok(account, 'the page renders one account section')
-      draw = () => account.type(account.props)
+      seat = seats.get('llm-pi-ai')
+      assert.ok(seat, 'the card is seated on the llm-pi-ai family')
+      const owner = { provider: { provider: route, settingsNs: 'llm-pi-ai' }, configured: true, keyConfigured: false }
+      draw = () => seat.component({ ...seat.entry.inject(), ...owner })
       paint()
-      return {
-        entry, translations, seats,
-        /**
-         * Render the provider-card seat for one namespace key and route.
-         *
-         * The owner hands the seat every row of the family, so the route id
-         * travels with the owner props exactly as ModelsSection dispatches it.
-         */
-        mountSeat(key, route = 'openai-codex') {
-          const seat = seats.get(key)
-          assert.ok(seat, 'the card seat is registered for ' + key)
-          const owner = { provider: { provider: route, settingsNs: key }, configured: true, keyConfigured: false }
-          draw = () => seat.component({ ...seat.entry.inject(), ...owner })
-          paint()
-          return tree
-        },
-        get tree() { return tree },
-      }
+      return { translations, get tree() { return tree } }
     },
   }
 }
-
 /** Injected stylesheet tags, in injection order. */
 function styleDocument() {
   const injected = []
@@ -162,7 +138,7 @@ function controls(tree) {
 }
 
 /** Answers the management API the way the host route does. */
-function host({ status, models = [], fail = [] } = {}) {
+function host({ status, fail = [] } = {}) {
   const calls = []
   return {
     calls,
@@ -170,69 +146,76 @@ function host({ status, models = [], fail = [] } = {}) {
       const operation = url.split('/').at(-1)
       calls.push(operation)
       if (fail.includes(operation)) throw new Error('offline')
-      assert.equal(init.headers['x-dsh-chatgpt-token'], 'capability')
-      const body = operation === 'status' ? status : operation === 'models' ? { models } : {}
-      return { ok: true, async json() { return body } }
+      assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
+      return { ok: true, async json() { return operation === 'status' ? status : {} } }
     },
   }
 }
 
 const connected = {
-  state: 'authorized', connected: true, email: 'test@example.com', provider: 'chatgpt-plan',
-  callbackPort: 0, requestTimeoutMs: 600_000, proxyUrl: 'http://127.0.0.1:7890', extraModels: ['gpt-6.1-sol'],
+  state: 'authorized', available: true, connected: true,
+  account: { name: 'Test Person', email: 'person@example.com', plan: 'plus', expires: Date.UTC(2026, 9, 14) },
 }
 
-/** Let the mounted page settle its initial status and catalog requests. */
+/** Let the mounted card settle its initial status request. */
 const settled = () => new Promise(resolve => setImmediate(resolve))
 
-test('browser module contributes ChatGPT to the settings sidebar and registers bilingual copy', () => {
+test('the card is seated on the llm-pi-ai family and registers bilingual copy', () => {
   const page = browser().mount()
-  assert.equal(page.entry.id, 'chatgpt-subscription')
-  assert.equal(page.entry.label(), 'ChatGPT')
-  assert.ok(page.entry.inject().connections['chatgpt-plan'])
   assert.deepEqual(Object.keys(page.translations.zh), Object.keys(page.translations.en))
 })
 
-test('the page styles one injected stylesheet from host tokens instead of inline styles', () => {
+test('only the openai-codex row renders the card', () => {
+  // One browser per row: each provider card is its own component instance, and
+  // this double keeps hook state per instance.
+  assert.ok(browser().mount('openai-codex').tree, 'the route the card signs into renders')
+  // Every pi-ai route shares one namespace, so the card must decline the rest:
+  // rendering there would offer a ChatGPT sign-in on llama-cpp.
+  for (const other of ['llama-cpp', 'command-code']) {
+    assert.equal(browser().mount(other).tree, null, other + ' must not render the card')
+  }
+})
+
+test('the card styles one injected stylesheet from host tokens instead of inline styles', () => {
   const document = styleDocument()
   const page = browser({ document }).mount()
   assert.equal(document.injected.length, 1)
   const [stylesheet] = document.injected
   assert.equal(stylesheet.dataset.plugin, 'dsh-llm-chatgpt')
-  assert.equal(stylesheet.dataset.pluginCss, 'dsh-llm-chatgpt/ChatgptSettings.css')
-  for (const token of ['--dsw-alias-label-primary', '--dsw-alias-settings-card-fill', '--dsw-alias-button-primary-fill', '--dsw-radius-xl']) {
+  assert.equal(stylesheet.dataset.pluginCss, 'dsh-llm-chatgpt/ChatgptCodex.css')
+  for (const token of ['--dsw-alias-button-primary-fill', '--dsw-radius-md', '--dsw-alias-state-success-primary']) {
     assert.ok(stylesheet.textContent.includes(token), token)
   }
   assert.equal(elements(page.tree).some(element => element.props.style !== undefined), false)
 })
 
-test('a connected account shows its identity, catalog and read-only configuration', async () => {
-  const api = host({ status: connected, models: [
-    { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-    { id: 'gpt-6.1-sol', name: 'gpt-6.1-sol (manual; verify access)', manual: true },
-  ] })
+test('a connected account shows its identity and offers sign-out', async () => {
+  const api = host({ status: connected })
   const page = browser({ environment: api }).mount()
   await settled()
-  await settled()
-  assert.deepEqual(api.calls, ['status', 'models'])
+  assert.deepEqual(api.calls, ['status'])
   const rendered = text(page.tree)
-  assert.match(rendered, /test@example\.com/)
+  assert.match(rendered, /Test Person/)
   assert.match(rendered, /已连接/)
-  assert.match(rendered, /GPT-5\.6 Sol/)
-  assert.match(rendered, /gpt-5\.6-sol/)
-  assert.match(rendered, /手动/)
-  assert.match(rendered, /http:\/\/127\.0\.0\.1:7890/)
-  assert.deepEqual(controls(page.tree), ['刷新模型列表', '退出并撤销会话'])
+  assert.match(rendered, /plan: plus/)
+  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
 })
 
-test('a disconnected account offers sign-in and reports the load failure', async () => {
-  const api = host({ status: { state: 'idle', connected: false, provider: 'chatgpt-plan', callbackPort: 0 }, fail: ['models'] })
+test('a disconnected account offers sign-in', async () => {
+  const api = host({ status: { state: 'idle', available: true, connected: false } })
   const page = browser({ environment: api }).mount()
   await settled()
+  assert.match(text(page.tree), /未连接 ChatGPT 账户/)
+  assert.deepEqual(controls(page.tree), ['登录 ChatGPT'])
+})
+
+test('a host without the flow hides the card entirely', async () => {
+  const api = host({ status: { state: 'idle', available: false, connected: false } })
+  const page = browser({ environment: api }).mount()
   await settled()
-  assert.match(text(page.tree), /未连接账户/)
-  assert.deepEqual(controls(page.tree), ['Continue with ChatGPT'])
-  assert.equal(elements(page.tree).some(element => element.props.role === 'alert'), false)
+  // No flow means no button: the row must look untouched rather than offer a
+  // sign-in that could never complete.
+  assert.equal(page.tree, null)
 })
 
 test('an unreachable management API reports one inline error', async () => {
@@ -244,81 +227,48 @@ test('an unreachable management API reports one inline error', async () => {
   assert.match(text(alert), /操作失败/)
 })
 
-test('login opens the popup during the click and finishes without a confirmation prompt', async () => {
+test('login opens the popup during the click and navigates it to the notice', async () => {
   const instance = browser()
   const events = []
   const popup = { location: {}, close() {} }
   const environment = {
-    open() { events.push('open'); return popup }, setTimeout() {}, clearTimeout() {},
+    open() { events.push('open'); return popup },
     async fetch(url, init) {
       events.push(url.split('/').at(-1))
-      assert.equal(init.headers['x-dsh-chatgpt-token'], 'capability')
-      const body = url.endsWith('/login') ? { loginUrl: 'http://127.0.0.1:1455/login' }
-        : url.endsWith('/status') ? { connected: true, state: 'authorized' }
-          : { models: [{ id: 'model', name: 'Model' }] }
-      return { ok: true, async json() { return body } }
-    },
-  }
-  const controller = instance.module.createController({ path: '/management', token: 'capability' }, environment)
-  await controller.login()
-  await new Promise(resolve => setImmediate(resolve))
-  assert.deepEqual(events.slice(0, 2), ['open', 'login'])
-  assert.equal(popup.location.href, 'http://127.0.0.1:1455/login')
-  assert.equal(popup.opener, null)
-  assert.equal(controller.getSnapshot().status.state, 'authorized')
-  assert.equal(controller.getSnapshot().models[0].id, 'model')
-  assert.equal(controller.getSnapshot().loginUrl, undefined)
-  controller.dispose()
-})
-
-test('blocked popup retains a clickable login URL while waiting for authorization', async () => {
-  const instance = browser()
-  let scheduled, cancelled = false
-  const environment = {
-    open() { return null }, setTimeout(callback) { scheduled = callback; return 1 }, clearTimeout() { cancelled = true },
-    async fetch(url) {
-      return { ok: true, async json() { return url.endsWith('/login')
-        ? { loginUrl: 'http://127.0.0.1:1455/login' } : { state: 'pending', loginUrl: 'http://127.0.0.1:1455/login' } } }
-    },
-  }
-  const controller = instance.module.createController({ path: '/management', token: 'capability' }, environment)
-  await controller.login()
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(controller.getSnapshot().loginUrl, 'http://127.0.0.1:1455/login')
-  assert.equal(typeof scheduled, 'function')
-  controller.dispose()
-  assert.equal(cancelled, true)
-})
-test('the provider-card seat renders the official openai-codex sign-in on the llm-pi-ai row', async () => {
-  const instance = browser({ environment: {
-    open() { return { location: {}, close() {} } },
-    async fetch(url, init) {
-      assert.match(url, /\/chatgpt-management\/openai-codex\/status$/)
       assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
-      return { ok: true, async json() { return { available: true, connected: true, account: { name: 'Test Person', plan: 'plus', expires: Date.now() + 86_400_000 } } } }
+      return { ok: true, async json() {
+        return url.endsWith('/login')
+          ? { state: 'pending', available: true, connected: false, notice: { message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' } }
+          : { state: 'idle', available: true, connected: false }
+      } }
     },
-  } })
-  // Applying the module is what seats the card; mount the page first.
-  const handle = instance.mount()
-  // The card is seated on the llm-pi-ai namespace, which is the row the route lives on.
-  assert.equal(instance.seats.has('llm-pi-ai'), true)
-  handle.mountSeat('llm-pi-ai')
-  await new Promise(resolve => setImmediate(resolve))
-  const rendered = handle.mountSeat('llm-pi-ai')
-  assert.ok(rendered, 'the card renders')
-  // The family shares one namespace, so the card must decline every other
-  // route on it: rendering there would offer a ChatGPT sign-in on llama-cpp.
-  for (const other of ['llama-cpp', 'command-code']) {
-    assert.equal(handle.mountSeat('llm-pi-ai', other), null, other + ' must not render the card')
   }
+  const page = browser({ environment }).mount()
+  await settled()
+  const login = elements(page.tree).find(element => element.type === 'button')
+  login.props.onClick()
+  await settled()
+  assert.deepEqual(events, ['status', 'open', 'login'])
+  assert.equal(popup.location.href, 'https://auth.openai.com/oauth/authorize?x=1')
+  assert.equal(popup.opener, null)
 })
 
-test('the settings page carries the plan page while the card seat stays off it', () => {
-  const instance = browser()
-  const page = instance.mount()
-  // The plan page renders the chatgpt-plan connection only; the codex card is
-  // seated on the provider row instead, so it must not appear here.
-  assert.equal(page.entry.name, 'settings.section')
-  assert.equal(page.seats.size, 1)
+test('a blocked popup keeps a clickable authorization link', async () => {
+  const environment = {
+    open() { return null },
+    async fetch(url) {
+      return { ok: true, async json() {
+        return url.endsWith('/login')
+          ? { state: 'pending', available: true, connected: false, notice: { message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' } }
+          : { state: 'idle', available: true, connected: false }
+      } }
+    },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  const link = elements(page.tree).find(element => element.type === 'a')
+  assert.ok(link, 'the authorization URL is reachable without a popup')
+  assert.equal(link.props.href, 'https://auth.openai.com/oauth/authorize?x=1')
 })
-

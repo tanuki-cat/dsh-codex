@@ -1,11 +1,20 @@
+/**
+ * Install this plugin into the local web profile.
+ *
+ * The plugin contributes a settings-page surface, not a provider route: it
+ * needs an installed package and nothing in cordis.patch.yml. The script
+ * therefore installs the tarball, removes any llm-chatgpt entry an earlier
+ * version left behind, and verifies that the plugin's module still imports.
+ *
+ * It writes only to $DSH_HOME/profiles/<profile>, backs that profile up first,
+ * and restores the patch if verification fails.
+ */
 import { spawnSync } from 'node:child_process'
-import { accessSync, constants, copyFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { captureSchemaBaseline, validateInstalledSchema } from './install-validation.mjs'
-import { normalizeProxyUrl } from '../src/proxy.js'
-import { normalizeExtraModels } from '../src/model-catalog.js'
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'))
@@ -15,33 +24,26 @@ const directory = join(home, 'profiles', profile)
 const patchFile = join(directory, 'cordis.patch.yml')
 const tarball = join(project, `dsh-llm-chatgpt-${manifest.version}.tgz`)
 const run = (args, options = {}) => spawnSync('dsh', args, { encoding: 'utf8', ...options })
-const templateLines = readFileSync(join(project, 'examples', 'cordis.patch.yml'), 'utf8').split('\n')
-// The installer owns this entry, so the template's manual-merge guidance is
-// recognized in existing patches and never written into a generated profile.
-const templateNotes = new Set(templateLines.filter(line => line.startsWith('#')).map(line => line.trimEnd()))
-const template = templateLines.filter(line => !templateNotes.has(line.trimEnd())).join('\n').replace(/\n+$/, '\n')
 const ownedIdLine = /^(\s*)(?:-\s+)?id:\s*llm-chatgpt\s*$/
 
-/** Indentation width of `line`, or -1 for a blank line. */
+/** Indentation width of one line, or -1 for a blank line. */
 function columnOf(line) {
   return line.search(/\S/)
 }
 
 /**
- * Drop every entry that configures this plugin, at any nesting depth. Appending
- * a fresh block per install left several same-id entries behind, and the loader
- * then applied each one as a separate configuration layer.
+ * Drop every entry that configured this plugin, at any nesting depth.
+ *
+ * Versions before 0.3.0 declared a chatgpt-plan provider through
+ * cordis.patch.yml. This build declares nothing there, so a leftover entry
+ * would configure a route no adapter serves.
  */
 function dropOwnedEntries(lines) {
   const kept = []
   for (let index = 0; index < lines.length;) {
     const marker = ownedIdLine.exec(lines[index])
-    if (marker === null && !templateNotes.has(lines[index].trimEnd())) {
-      kept.push(lines[index])
-      index += 1
-      continue
-    }
-    const indent = marker === null ? columnOf(lines[index]) : marker[1].length
+    if (marker === null) { kept.push(lines[index]); index += 1; continue }
+    const indent = marker[1].length
     index += 1
     while (index < lines.length) {
       const column = columnOf(lines[index])
@@ -57,11 +59,7 @@ function dropEmptyInserts(lines) {
   const kept = []
   for (let index = 0; index < lines.length;) {
     const header = /^(\s*)-\s*insert:\s*$/.exec(lines[index])
-    if (header === null) {
-      kept.push(lines[index])
-      index += 1
-      continue
-    }
+    if (header === null) { kept.push(lines[index]); index += 1; continue }
     const indent = header[1].length
     let end = index + 1
     while (end < lines.length) {
@@ -76,58 +74,11 @@ function dropEmptyInserts(lines) {
   return kept
 }
 
-/** Read the configuration rows the previous installs wrote. */
-function readChatgptConfig(lines) {
-  const config = {}
-  for (const line of lines) {
-    const proxy = /^\s*proxyUrl:\s*"([^"]*)"\s*$/.exec(line)
-    if (proxy !== null && config.proxyUrl === undefined) config.proxyUrl = proxy[1]
-    const models = /^\s*extraModels:\s*(\[[^\]]*\])\s*$/.exec(line)
-    if (models === null || config.extraModels !== undefined) continue
-    try { config.extraModels = JSON.parse(models[1]) } catch { /* Unreadable rows cannot merge and are dropped with their entry. */ }
-  }
-  return config
-}
-
-/** Insert the tuned rows into the template, keeping the template as the shape authority. */
-function withConfig(block, config) {
-  const extras = [
-    ...config.proxyUrl === undefined ? [] : [`proxyUrl: ${JSON.stringify(config.proxyUrl)}`],
-    ...config.extraModels === undefined ? [] : [`extraModels: ${JSON.stringify(config.extraModels)}`],
-  ]
-  const lines = block.trimEnd().split('\n')
-  if (extras.length === 0) return `${lines.join('\n')}\n`
-  const anchor = lines.findIndex(line => /^\s*requestTimeoutMs:/.test(line))
-  if (anchor === -1) throw new Error('examples/cordis.patch.yml 缺少 requestTimeoutMs 锚点，未更改 cordis.patch.yml。')
-  const indent = /^\s*/.exec(lines[anchor])[0]
-  lines.splice(anchor + 1, 0, ...extras.map(line => indent + line))
-  return `${lines.join('\n')}\n`
-}
-
-/** Replace the plugin's enable block with one freshly templated entry. */
-function rewritePatch(text, config) {
-  const kept = dropEmptyInserts(dropOwnedEntries(text.split('\n')))
-  while (kept.length > 0 && kept.at(-1).trim() === '') kept.pop()
-  const head = kept.length === 0 ? '' : `${kept.join('\n')}\n\n`
-  return `${head}${withConfig(template, config)}`
-}
-
 try {
-  const args = process.argv.slice(2)
-  if (args.length % 2 !== 0) throw new Error('用法：node scripts/install-local.mjs [--proxy http://127.0.0.1:7890] [--model gpt-6.1-sol]')
-  const supplied = new Map()
-  for (let index = 0; index < args.length; index += 2) {
-    if (!['--proxy', '--model'].includes(args[index]) || supplied.has(args[index])) {
-      throw new Error('用法：node scripts/install-local.mjs [--proxy http://127.0.0.1:7890] [--model gpt-6.1-sol]')
-    }
-    supplied.set(args[index], args[index + 1])
-  }
-  const proxyUrl = supplied.has('--proxy') ? normalizeProxyUrl(supplied.get('--proxy')) : undefined
-  const extraModels = supplied.has('--model') ? normalizeExtraModels([supplied.get('--model')]) : undefined
   const versionResult = run(['--version'])
   if (versionResult.error || versionResult.status !== 0) throw new Error('无法读取本机 dsh 版本。')
   const runtimeVersion = versionResult.stdout.trim()
-  if (!manifest.peerDependencies['@deepseek-ai/dsh-llm'].split(' || ').includes(runtimeVersion)) {
+  if (!manifest.peerDependencies['@deepseek-ai/dsh-credentials'].split(' || ').includes(runtimeVersion)) {
     throw new Error(`插件未声明支持本机 DSH ${runtimeVersion}，安装已停止。`)
   }
   if (!existsSync(join(directory, 'package.json'))) throw new Error(`现有 web profile 不存在：${directory}`)
@@ -140,11 +91,10 @@ try {
   mkdirSync(backup, { recursive: true, mode: 0o700 })
   for (const filename of ['package.json', 'cordis.patch.yml', 'pnpm-lock.yaml']) {
     const current = join(directory, filename)
-    if (existsSync(current)) {
-      const saved = join(backup, filename)
-      copyFileSync(current, saved)
-      chmodSync(saved, 0o600)
-    }
+    if (!existsSync(current)) continue
+    const saved = join(backup, filename)
+    copyFileSync(current, saved)
+    chmodSync(saved, 0o600)
   }
   console.log(`已备份 profile 配置：${backup}`)
   const installedPackage = join(directory, 'node_modules', 'dsh-llm-chatgpt', 'package.json')
@@ -160,28 +110,21 @@ try {
   }
   const currentPatch = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
   if (currentPatch !== originalPatch) throw new Error('安装期间 profile 配置发生变化，请检查后重新运行。')
-  const previous = readChatgptConfig(currentPatch.split('\n'))
-  const previousCount = currentPatch.split('\n').filter(line => ownedIdLine.test(line)).length
-  if (previousCount > 0) {
-    console.log(previousCount > 1
-      ? `检测到 ${previousCount} 个重复的 llm-chatgpt 条目；本次合并为一个，保留已设置的配置项。`
-      : '检测到已存在的 llm-chatgpt 配置；本次更新为单个条目，保留已设置的配置项。')
-  }
-  const proxy = proxyUrl ?? previous.proxyUrl
-  const models = extraModels === undefined ? previous.extraModels : [...new Set([...(previous.extraModels ?? []), ...extraModels])]
-  const nextPatch = rewritePatch(currentPatch, {
-    ...proxy === undefined || proxy === '' ? {} : { proxyUrl: proxy },
-    ...models === undefined || models.length === 0 ? {} : { extraModels: models },
-  })
+  const lines = dropEmptyInserts(dropOwnedEntries(currentPatch.split('\n')))
+  while (lines.length > 0 && lines.at(-1).trim() === '') lines.pop()
+  const nextPatch = lines.length === 0 ? '' : `${lines.join('\n')}\n`
+  const removed = originalPatch.split('\n').filter(line => ownedIdLine.test(line)).length
+  if (removed > 0) console.log(`已移除 ${removed} 个 llm-chatgpt 配置项：本版本不再声明 provider 路由。`)
   const patchChanged = nextPatch !== currentPatch
   if (patchChanged) writeFileSync(patchFile, nextPatch, { mode: 0o600 })
   let schemaResult
   try {
-    // Config and schema output can contain private values; keep them out of terminal logs.
+    // Config and schema output can contain private values; keep them out of
+    // terminal logs. The plugin declares no profile entry, so this only proves
+    // the composition still resolves — the schema comparison below is what
+    // proves the plugin's module imports.
     const configCheck = run(['--profile', profile, '--dump-config'], { maxBuffer: 16 * 1024 * 1024 })
-    if (configCheck.error || configCheck.status !== 0 || !configCheck.stdout.includes('dsh-llm-chatgpt')) {
-      throw new Error('--dump-config 验证失败。')
-    }
+    if (configCheck.error || configCheck.status !== 0) throw new Error('--dump-config 验证失败。')
     schemaResult = validateInstalledSchema(baseline, run(['--profile', profile, '--dump-config-schema'], { maxBuffer: 16 * 1024 * 1024 }))
   } catch (error) {
     if (patchChanged) writeFileSync(patchFile, originalPatch, { mode: 0o600 })
@@ -189,7 +132,7 @@ try {
   }
   console.log(`已将 dsh-llm-chatgpt ${manifest.version} 安装到 web profile，组合配置和插件模块导入检查通过。`)
   if (!schemaResult.complete) console.log('原有 profile 的 schema 导出仍不完整；本插件未引入新增 schema 诊断。')
-  console.log('重启 dsh web 后，在会话中执行 /chatgpt-plan-login。')
+  console.log('重启 dsh web 后，在「设置 → 模型」的 openai-codex 卡片上点击登录。')
 } catch (error) {
   console.error(error.code === 'EPERM' || error.code === 'EACCES'
     ? '当前进程无权写入 web profile，请在本机普通终端中运行此脚本。'

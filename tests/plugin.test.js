@@ -2,74 +2,61 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 
-// These doubles validate the plugin's host calls, not a real Cordis boot.
-const modules = {
-  '@deepseek-ai/dsh-credentials': `export const credentialKey = (scope, id) => scope + '/' + id`,
-  '@deepseek-ai/dsh-llm': `export class LlmAdapter {};
-    export class LlmError extends Error { constructor(message, code, options) { super(message); this.code=code; this.options=options } };
-    export const attributionHeaders = () => ({ 'user-agent': 'deepseek-harness/test' });`,
-}
+// These doubles validate the plugin's host calls, not a real Cordis boot: the
+// only host fact it reads is the credential key grammar.
 const hooks = registerHooks({ resolve(specifier, context, next) {
-  if (specifier in modules) return { url: `data:text/javascript,${encodeURIComponent(modules[specifier])}`, shortCircuit: true }
+  if (specifier === '@deepseek-ai/dsh-credentials') {
+    return { url: 'data:text/javascript,' + encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id"), shortCircuit: true }
+  }
   return next(specifier, context)
 } })
-const { apply, inject } = await import('../src/index.js')
+const { apply, inject, name } = await import('../src/index.js')
 hooks.deregister()
 
-function context(status = 'authorized') {
-  const commands = new Map()
-  let flow, adapter, registered
+/**
+ * A Host double offering only the seams the plugin reads.
+ *
+ * flow decides whether llm-pi-ai is present: without one there is nothing to
+ * sign into, which is the case the plugin must handle by doing nothing.
+ */
+function context({ flow = true } = {}) {
+  const routes = new Map()
   const ctx = {
-    credentials: { async readRecord() { return undefined } },
-    llm: { registerAdapter(routes, value) { registered = routes; adapter = value } },
+    credentials: {},
     authorization: {
-      registerFlow(value) { flow = value },
-      async begin() { return { status } },
-      cancel() {},
+      describe(key) {
+        assert.equal(key, 'llm-pi-ai/openai-codex')
+        if (!flow) return undefined
+        return { key, label: 'OpenAI (ChatGPT Plus/Pro)', methods: [{ id: 'oauth', label: 'Sign in' }], inFlight: false }
+      },
     },
-    commands: { register(command) { commands.set(command.name, command) } },
-    userQuestions: {},
-    effect(callback) { callback() },
     inject(dependencies, callback) {
-      if (dependencies[0] === 'webServer') return
-      assert.deepEqual(dependencies, ['commands', 'userQuestions']); callback(ctx)
+      assert.deepEqual(dependencies, ['webServer', 'webRuntime'])
+      callback(ctx)
     },
+    on() {},
+    effect() {},
+    webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+    webRuntime: { trustedHosts: [] },
   }
-  return { ctx, commands, get flow() { return flow }, get adapter() { return adapter }, get routes() { return registered } }
+  return { ctx, routes }
 }
 
-test('plugin registers a separate route, owned credential flow and interactive commands', async () => {
+test('plugin claims no provider route and no authorization flow of its own', () => {
   const host = context()
   apply(host.ctx)
-  assert.deepEqual(inject, ['llm', 'credentials', 'authorization'])
-  assert.deepEqual(host.routes, ['chatgpt-plan'])
-  assert.equal(host.flow.key, 'llm-chatgpt/chatgpt-plan')
-  assert.equal(host.flow.methods[0].id, 'oauth')
-  assert.equal(host.commands.size, 3)
-  assert.deepEqual(await host.adapter.listModels(), [])
-  assert.equal((await host.adapter.resolveModel('chatgpt-plan', 'model')).inputModalities[0], 'text')
+  // The point of the slimming: pi-ai owns the route and its flow, so this
+  // plugin registers exactly one management endpoint and nothing else.
+  assert.equal(name, 'llm-chatgpt')
+  assert.deepEqual(inject, ['credentials', 'authorization'])
+  assert.equal(host.routes.size, 1)
+  assert.ok(host.routes.has('/chatgpt-management/openai-codex'))
 })
 
-test('cancelled authorization cannot be reported as a successful connection', async () => {
-  const host = context('cancelled')
+test('plugin registers nothing when llm-pi-ai offers no openai-codex flow', () => {
+  const host = context({ flow: false })
   apply(host.ctx)
-  const result = await host.commands.get('chatgpt-plan-login').handler({ signal: new AbortController().signal })
-  assert.equal(result.kind, 'error')
-  assert.match(result.text, /取消/)
-})
-
-test('authorization success reports the actual provider route', async () => {
-  const host = context()
-  apply(host.ctx, { provider: 'personal-chatgpt' })
-  const result = await host.commands.get('personal-chatgpt-login').handler({ signal: new AbortController().signal })
-  assert.equal(result.kind, 'success')
-  assert.match(result.text, /personal-chatgpt/)
-})
-
-test('invalid provider and bounds fail before registration', () => {
-  for (const config of [{ provider: 'host' }, { provider: 'Invalid' }, { callbackPort: -1 }, { requestTimeoutMs: 0 }]) {
-    const host = context()
-    assert.throws(() => apply(host.ctx, config))
-    assert.equal(host.routes, undefined)
-  }
+  // No flow means no endpoint: the page then shows no button rather than one
+  // that could never complete.
+  assert.equal(host.routes.size, 0)
 })

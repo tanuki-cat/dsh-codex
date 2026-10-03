@@ -115,6 +115,12 @@
 
 使用 node:test 对真实 OAuth / JWT / wire / SSE / 刷新代码进行测试，模拟外部 OpenAI 返回值，验证错误、取消、截断和工具往返。通过 npm pack dry-run 检查交付内容。真实订阅资格、OAuth 服务开放、宿主实际加载及请求计费必须进行真实账户联调；未进行时明确标注，不将模拟测试作为接入成功。
 
+## 归档：0.3.0 删除本文所述实现
+
+本文记录的 `chatgpt-plan` provider——自建 OAuth、Responses 协议、SSE 转换、模型目录与订阅管理页——已在 0.3.0 整体删除。它存在的前提是 DSH 缺少官方 ChatGPT 订阅接入；该前提在 `@deepseek-ai/dsh-llm-pi-ai` 内置 `openai-codex` 后不再成立。
+
+插件现为官方路由的设置页登录入口，范围与验证见 [方案 A 设计文档](design-task-openai-codex-in-plugin-login.md)。本文保留为历史记录，其中描述的模块、配置项与命令均已不存在，不作为当前行为依据。
+
 ## 依据
 
 - https://developers.openai.com/siwc/token-sharing-open-source/sign-in
