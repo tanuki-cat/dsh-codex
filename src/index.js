@@ -13,16 +13,14 @@
  * @module dsh-llm-chatgpt
  */
 import { createCodexManagement, registerCodexManagement } from './management.js'
-import { codexFlow } from './codex.js'
 
 export const name = 'llm-chatgpt'
 export const inject = ['credentials', 'authorization']
 
 export function apply(ctx) {
-  // No flow means no llm-pi-ai in this composition, so there is nothing to
-  // sign into and no endpoint is worth registering: the page then shows no
-  // button instead of one that cannot work.
-  if (codexFlow(ctx) === undefined) return
+  // Register independently of flow mount order. The status operation checks
+  // availability dynamically, and the client hides the card until llm-pi-ai
+  // offers the flow.
   ctx.inject(['webServer', 'webRuntime'], web => {
     registerCodexManagement(web, createCodexManagement(ctx))
   })

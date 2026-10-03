@@ -51,6 +51,7 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
     },
   }
   let registration
+  const disposers = []
   // The sandbox is the page's global object, so `document` and the browser
   // doubles are reachable both bare and through `globalThis`.
   const sandbox = {
@@ -80,7 +81,10 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
       let seat, translations
       const ctx = {
         locale: { register(_ns, value) { translations = value; return () => {} }, bind() { return key => translations.zh[key] } },
-        effect(callback) { callback() },
+        effect(callback) {
+          const dispose = callback()
+          if (typeof dispose === 'function') disposers.push(dispose)
+        },
         slots: {
           inject(name, callback) { assert.equal(name, 'settings.models.provider-card'); callback() },
           register(value, view) { seats.set(value.key, { entry: value, component: view }) },
@@ -92,7 +96,11 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
       const owner = { provider: { provider: route, settingsNs: 'llm-pi-ai' }, configured: true, keyConfigured: false }
       draw = () => seat.component({ ...seat.entry.inject(), ...owner })
       paint()
-      return { translations, get tree() { return tree } }
+      return {
+        translations,
+        get tree() { return tree },
+        unmount() { for (const dispose of disposers.reverse()) dispose() },
+      }
     },
   }
 }
@@ -102,7 +110,13 @@ function styleDocument() {
   return {
     injected,
     querySelector() { return null },
-    createElement() { return { dataset: {}, textContent: '' } },
+    createElement() {
+      const tag = { dataset: {}, textContent: '', remove() {
+        const index = injected.indexOf(tag)
+        if (index !== -1) injected.splice(index, 1)
+      } }
+      return tag
+    },
     head: { appendChild(tag) { injected.push(tag) } },
   }
 }
@@ -187,6 +201,8 @@ test('the card styles one injected stylesheet from host tokens instead of inline
     assert.ok(stylesheet.textContent.includes(token), token)
   }
   assert.equal(elements(page.tree).some(element => element.props.style !== undefined), false)
+  page.unmount()
+  assert.equal(document.injected.length, 0)
 })
 
 test('a connected account shows its identity and offers sign-out', async () => {
@@ -227,35 +243,48 @@ test('an unreachable management API reports one inline error', async () => {
   assert.match(text(alert), /操作失败/)
 })
 
-test('login opens the popup during the click and navigates it to the notice', async () => {
-  const instance = browser()
+test('login keeps its popup while polling a delayed notice and refreshes after authorization', async () => {
   const events = []
-  const popup = { location: {}, close() {} }
+  let statusReads = 0
+  let closed = 0
+  const popup = { location: {}, close() { closed += 1 } }
   const environment = {
     open() { events.push('open'); return popup },
+    setTimeout(callback) { setImmediate(callback); return 1 },
+    clearTimeout() {},
     async fetch(url, init) {
-      events.push(url.split('/').at(-1))
+      const operation = url.split('/').at(-1)
+      events.push(operation)
       assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
       return { ok: true, async json() {
-        return url.endsWith('/login')
-          ? { state: 'pending', available: true, connected: false, notice: { message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' } }
-          : { state: 'idle', available: true, connected: false }
+        if (operation === 'login') return { state: 'pending', available: true, connected: false }
+        statusReads += 1
+        if (statusReads === 1) return { state: 'idle', available: true, connected: false }
+        if (statusReads === 2) return {
+          state: 'pending', available: true, connected: false,
+          notice: { message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' },
+        }
+        return { ...connected, account: { name: 'After Login' } }
       } }
     },
   }
   const page = browser({ environment }).mount()
   await settled()
-  const login = elements(page.tree).find(element => element.type === 'button')
-  login.props.onClick()
-  await settled()
-  assert.deepEqual(events, ['status', 'open', 'login'])
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  for (let index = 0; index < 4; index += 1) await settled()
+  assert.deepEqual(events, ['status', 'open', 'login', 'status', 'status'])
   assert.equal(popup.location.href, 'https://auth.openai.com/oauth/authorize?x=1')
   assert.equal(popup.opener, null)
+  assert.equal(closed, 1)
+  assert.match(text(page.tree), /After Login/)
+  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
 })
 
 test('a blocked popup keeps a clickable authorization link', async () => {
   const environment = {
     open() { return null },
+    setTimeout() { return 1 },
+    clearTimeout() {},
     async fetch(url) {
       return { ok: true, async json() {
         return url.endsWith('/login')
@@ -271,4 +300,37 @@ test('a blocked popup keeps a clickable authorization link', async () => {
   const link = elements(page.tree).find(element => element.type === 'a')
   assert.ok(link, 'the authorization URL is reachable without a popup')
   assert.equal(link.props.href, 'https://auth.openai.com/oauth/authorize?x=1')
+  assert.deepEqual(controls(page.tree), ['打开浏览器完成授权', '取消登录'])
+})
+
+test('a pending sign-in can be cancelled without starting a second login', async () => {
+  const calls = []
+  let timer
+  const environment = {
+    open() { return { location: {}, close() {} } },
+    setTimeout(callback) { timer = callback; return 1 },
+    clearTimeout() { timer = undefined },
+    async fetch(url) {
+      const operation = url.split('/').at(-1)
+      calls.push(operation)
+      return { ok: true, async json() {
+        if (operation === 'login' || operation === 'status' && calls.length > 1) {
+          return { state: 'pending', available: true, connected: false }
+        }
+        if (operation === 'cancel') return { state: 'cancelled', available: true, connected: false }
+        return { state: 'idle', available: true, connected: false }
+      } }
+    },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  assert.equal(typeof timer, 'function')
+  assert.deepEqual(controls(page.tree), ['取消登录'])
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  assert.deepEqual(calls, ['status', 'login', 'cancel'])
+  assert.deepEqual(controls(page.tree), ['登录 ChatGPT'])
+  assert.equal(timer, undefined)
 })

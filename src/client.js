@@ -54,23 +54,25 @@ window.__ModuleLoader__.load({
 @keyframes dsh-chatgpt-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.dsh-chatgpt-spinner,.dsh-chatgpt-dot{animation:none}}
 `
-    if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) === null) {
+    function mountStyles() {
+      if (typeof document === 'undefined' || document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) !== null) return () => {}
       const tag = document.createElement('style')
       tag.dataset.plugin = 'dsh-llm-chatgpt'
       tag.dataset.pluginCss = STYLE_ID
       tag.textContent = css
       document.head.appendChild(tag)
+      return () => tag.remove()
     }
     const dictionaries = {
       zh: {
-        login: '登录 ChatGPT', disconnected: '未连接 ChatGPT 账户', connected: '已连接',
-        loading: '正在加载…', expires: '凭据有效期至', logout: '退出并撤销会话', open: '打开浏览器完成授权',
+        login: '登录 ChatGPT', disconnected: '未连接 ChatGPT 账户', connected: '已连接', pending: '等待授权…',
+        loading: '正在加载…', expires: '凭据有效期至', logout: '退出并撤销会话', cancel: '取消登录', open: '打开浏览器完成授权',
         hint: '使用官方 openai-codex 路由。点击登录后浏览器会打开授权页面；完成后此卡片会自动更新。',
         error: '操作失败，请检查网络与账户权限后重试。',
       },
       en: {
-        login: 'Sign in to ChatGPT', disconnected: 'No ChatGPT account connected', connected: 'Connected',
-        loading: 'Loading…', expires: 'Credential valid until', logout: 'Sign out and revoke session', open: 'Open browser to authorize',
+        login: 'Sign in to ChatGPT', disconnected: 'No ChatGPT account connected', connected: 'Connected', pending: 'Waiting for authorization…',
+        loading: 'Loading…', expires: 'Credential valid until', logout: 'Sign out and revoke session', cancel: 'Cancel sign-in', open: 'Open browser to authorize',
         hint: 'Uses the official openai-codex route. Signing in opens your browser; this card updates once it finishes.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
       },
@@ -87,11 +89,19 @@ window.__ModuleLoader__.load({
       let snapshot = { loading: true, busy: false, status: undefined, error: false }
       const listeners = new Set()
       let disposed = false
+      let timer
+      let popup
+      let popupUrl
+      let sequence = 0
       const requests = new Set()
       const publish = patch => {
         if (disposed) return
         snapshot = { ...snapshot, ...patch }
         for (const listener of listeners) listener(snapshot)
+      }
+      const stopPolling = () => {
+        if (timer !== undefined) environment.clearTimeout(timer)
+        timer = undefined
       }
       const request = async (operation, method = 'GET') => {
         const abort = new AbortController()
@@ -105,27 +115,62 @@ window.__ModuleLoader__.load({
           return await response.json()
         } finally { requests.delete(abort) }
       }
+      const accept = (status, expected = sequence) => {
+        if (expected !== sequence) return
+        publish({ loading: false, busy: false, status, error: false })
+        if (popup && status?.notice?.url && popupUrl !== status.notice.url) {
+          popup.location.href = status.notice.url
+          popupUrl = status.notice.url
+        }
+        if (status?.state !== 'pending') {
+          stopPolling()
+          popup?.close()
+          popup = undefined
+          popupUrl = undefined
+          return
+        }
+        stopPolling()
+        timer = environment.setTimeout(async () => {
+          timer = undefined
+          try { accept(await request('status'), expected) }
+          catch {
+            if (expected !== sequence) return
+            popup?.close(); popup = undefined; popupUrl = undefined
+            publish({ busy: false, error: true })
+          }
+        }, 500)
+      }
       return {
         getSnapshot: () => snapshot,
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
         async load() {
-          try { publish({ loading: false, status: await request('status'), error: false }) }
-          catch { publish({ loading: false, error: true }) }
+          const expected = sequence
+          try { accept(await request('status'), expected) }
+          catch { if (expected === sequence) publish({ loading: false, error: true }) }
         },
         async act(operation) {
+          const expected = ++sequence
+          stopPolling()
           // Open synchronously in the user's click stack to avoid popup blockers.
-          const popup = operation === 'login' ? environment.open('about:blank', '_blank') : undefined
-          if (popup) popup.opener = null
+          if (operation === 'login') {
+            popup = environment.open('about:blank', '_blank') ?? undefined
+            popupUrl = undefined
+            if (popup) popup.opener = null
+          }
           publish({ busy: true, error: false })
-          try {
-            const status = await request(operation, 'POST')
-            publish({ busy: false, status })
-            if (popup && status?.notice?.url) popup.location.href = status.notice.url
-            else popup?.close()
-          } catch { popup?.close(); publish({ busy: false, error: true }) }
+          try { accept(await request(operation, 'POST'), expected) }
+          catch {
+            if (expected !== sequence) return
+            popup?.close(); popup = undefined; popupUrl = undefined
+            publish({ busy: false, error: true })
+          }
         },
         dispose() {
           disposed = true
+          stopPolling()
+          popup?.close()
+          popup = undefined
+          popupUrl = undefined
           for (const request of requests) request.abort()
           listeners.clear()
         },
@@ -160,7 +205,8 @@ window.__ModuleLoader__.load({
       // there is nothing this card could sign into.
       if (status !== undefined && status.available === false) return null
       const account = status?.account
-      const label = state.loading ? t('loading') : connected ? (account?.name || account?.email || t('connected')) : t('disconnected')
+      const pending = status?.state === 'pending'
+      const label = state.loading ? t('loading') : connected ? (account?.name || account?.email || t('connected')) : pending ? t('pending') : t('disconnected')
       const note = connected
         ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
         : t('hint')
@@ -172,7 +218,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'dsh-chatgpt-card' },
         h('div', { className: 'dsh-chatgpt-identity' },
           h('span', { className: 'dsh-chatgpt-avatar', 'aria-hidden': 'true' },
-            h('span', { className: 'dsh-chatgpt-dot', 'data-state': state.loading || state.busy ? 'ongoing' : connected ? 'done' : 'idle' })),
+            h('span', { className: 'dsh-chatgpt-dot', 'data-state': state.loading || state.busy || pending ? 'ongoing' : connected ? 'done' : 'idle' })),
           h('div', { className: 'dsh-chatgpt-lines' },
             h('span', { className: 'dsh-chatgpt-name', role: 'status', 'aria-live': 'polite' },
               h('span', { className: 'dsh-chatgpt-nameText' }, label),
@@ -183,11 +229,14 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dsh-chatgpt-actions' },
           connected
             ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))
-            : button(t('login'), 'primary', () => void controller.current?.act('login'))),
+            : pending
+              ? button(t('cancel'), 'danger', () => void controller.current?.act('cancel'))
+              : button(t('login'), 'primary', () => void controller.current?.act('login'))),
         state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')))
     }
 
     function apply(ctx) {
+      ctx.effect(() => mountStyles(), 'chatgpt sign-in styles')
       ctx.effect(() => ctx.locale.register(NS, dictionaries), 'chatgpt sign-in translations')
       const t = ctx.locale.bind(NS)
       // The seat is keyed by the row's settings namespace, so this renders on

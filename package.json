@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-chatgpt",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Settings-page sign-in for the official openai-codex route in DeepSeek Harness",
   "type": "module",
   "main": "./src/index.js",

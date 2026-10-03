@@ -91,7 +91,7 @@ test('installer removes the provider entry earlier versions declared', () => {
   const current = fixture()
   // What 0.2.x wrote: an insert block declaring the chatgpt-plan route.
   const legacy = current.original
-    + '\n- insert:\n    - id: llm-chatgpt\n      name: dsh-llm-chatgpt\n      config:\n        provider: chatgpt-plan\n'
+    + '\n- insert:\n    # Legacy entry removed with its now-empty wrapper.\n\n    - id: llm-chatgpt\n      name: dsh-llm-chatgpt\n      config:\n        provider: chatgpt-plan\n'
     + '\n- id: llm-chatgpt\n  name: dsh-llm-chatgpt\n  config:\n    proxyUrl: "http://127.0.0.1:7890"\n    extraModels: ["gpt-6.1-sol"]\n'
   writeFileSync(join(current.profile, 'cordis.patch.yml'), legacy)
   const result = current.run()
@@ -106,6 +106,38 @@ test('installer removes the provider entry earlier versions declared', () => {
   assert.doesNotMatch(configured, /chatgpt-plan|proxyUrl|extraModels/)
   assert.equal(current.run().status, 0)
   assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), configured)
+})
+
+test('installer removes reordered owned entries without deleting nested matching ids', () => {
+  const current = fixture()
+  const legacy = [
+    '- insert:',
+    '    - name: dsh-llm-chatgpt',
+    '      id: "llm-chatgpt"',
+    '      config:',
+    '        provider: chatgpt-plan',
+    '    - id: unrelated-child',
+    '      config:',
+    '        metadata:',
+    '          id: llm-chatgpt',
+    '- name: dsh-llm-chatgpt',
+    "  id: 'llm-chatgpt'",
+    '  config:',
+    '    provider: chatgpt-plan',
+    '- id: unrelated-top-level',
+    '  config:',
+    '    id: llm-chatgpt',
+    '',
+  ].join('\n')
+  writeFileSync(join(current.profile, 'cordis.patch.yml'), legacy)
+  const result = current.run()
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /已移除 2 个 llm-chatgpt 配置项/)
+  const configured = readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8')
+  assert.doesNotMatch(configured, /dsh-llm-chatgpt|chatgpt-plan/)
+  assert.match(configured, /id: unrelated-child/)
+  assert.match(configured, /id: unrelated-top-level/)
+  assert.equal((configured.match(/id: llm-chatgpt/g) ?? []).length, 2)
 })
 
 test('installer leaves a profile with no plugin entry untouched', () => {

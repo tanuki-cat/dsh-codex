@@ -24,54 +24,73 @@ const directory = join(home, 'profiles', profile)
 const patchFile = join(directory, 'cordis.patch.yml')
 const tarball = join(project, `dsh-llm-chatgpt-${manifest.version}.tgz`)
 const run = (args, options = {}) => spawnSync('dsh', args, { encoding: 'utf8', ...options })
-const ownedIdLine = /^(\s*)(?:-\s+)?id:\s*llm-chatgpt\s*$/
+const ownedId = /^(?:"llm-chatgpt"|'llm-chatgpt'|llm-chatgpt)\s*(?:#.*)?$/
 
-/** Indentation width of one line, or -1 for a blank line. */
-function columnOf(line) {
-  return line.search(/\S/)
+/** Whether one mapping field at an exact indentation owns this plugin id. */
+function isOwnedIdField(line, indent, item) {
+  if (line.search(/\S/) !== indent) return false
+  let value = line.slice(indent)
+  if (item) {
+    if (!value.startsWith('-')) return false
+    value = value.slice(1).trimStart()
+  } else if (value.startsWith('-')) return false
+  if (!value.startsWith('id:')) return false
+  return ownedId.test(value.slice(3).trimStart())
+}
+
+/** Whether one sequence-item mapping directly identifies this plugin. */
+function ownsEntry(block, indent) {
+  return isOwnedIdField(block[0], indent, true)
+    || block.slice(1).some(line => isOwnedIdField(line, indent + 2, false))
+}
+
+/** Remove owned children from one top-level `- insert:` operation. */
+function cleanInsert(block) {
+  const starts = []
+  for (let index = 1; index < block.length; index += 1) {
+    const match = /^(\s+)-\s*\S/.exec(block[index])
+    if (match) starts.push({ index, indent: match[1].length })
+  }
+  if (starts.length === 0) return { lines: block, removed: 0 }
+  const childIndent = Math.min(...starts.map(start => start.indent))
+  const children = starts.filter(start => start.indent === childIndent).map(start => start.index)
+  const kept = block.slice(0, children[0])
+  let removed = 0
+  for (let position = 0; position < children.length; position += 1) {
+    const start = children[position]
+    const end = children[position + 1] ?? block.length
+    const child = block.slice(start, end)
+    if (ownsEntry(child, childIndent)) removed += 1
+    else kept.push(...child)
+  }
+  const hasChildren = kept.slice(1).some(line => line.search(/\S/) === childIndent && line.slice(childIndent).startsWith('-'))
+  return { lines: removed > 0 && !hasChildren ? [] : kept, removed }
 }
 
 /**
- * Drop every entry that configured this plugin, at any nesting depth.
+ * Remove only Cordis entries owned by this plugin.
  *
- * Versions before 0.3.0 declared a chatgpt-plan provider through
- * cordis.patch.yml. This build declares nothing there, so a leftover entry
- * would configure a route no adapter serves.
+ * Matching is intentionally limited to top-level entries and direct children
+ * of a top-level insert operation. An unrelated nested object may legally use
+ * the same id and must never be deleted by this migration.
  */
 function dropOwnedEntries(lines) {
   const kept = []
+  let removed = 0
   for (let index = 0; index < lines.length;) {
-    const marker = ownedIdLine.exec(lines[index])
-    if (marker === null) { kept.push(lines[index]); index += 1; continue }
-    const indent = marker[1].length
-    index += 1
-    while (index < lines.length) {
-      const column = columnOf(lines[index])
-      if (column !== -1 && column <= indent) break
-      index += 1
-    }
-  }
-  return kept
-}
-
-/** Drop `- insert:` wrappers whose child list became empty. */
-function dropEmptyInserts(lines) {
-  const kept = []
-  for (let index = 0; index < lines.length;) {
-    const header = /^(\s*)-\s*insert:\s*$/.exec(lines[index])
-    if (header === null) { kept.push(lines[index]); index += 1; continue }
-    const indent = header[1].length
+    if (!/^-\s*\S/.test(lines[index])) { kept.push(lines[index]); index += 1; continue }
     let end = index + 1
-    while (end < lines.length) {
-      const column = columnOf(lines[end])
-      if (column !== -1 && column <= indent) break
-      end += 1
-    }
-    const body = lines.slice(index + 1, end)
-    if (body.some(line => /^\s*-\s/.test(line))) kept.push(lines[index], ...body)
+    while (end < lines.length && !/^-\s*\S/.test(lines[end])) end += 1
+    const block = lines.slice(index, end)
+    if (ownsEntry(block, 0)) removed += 1
+    else if (/^-\s*insert:\s*(?:#.*)?$/.test(block[0])) {
+      const cleaned = cleanInsert(block)
+      kept.push(...cleaned.lines)
+      removed += cleaned.removed
+    } else kept.push(...block)
     index = end
   }
-  return kept
+  return { lines: kept, removed }
 }
 
 try {
@@ -110,10 +129,11 @@ try {
   }
   const currentPatch = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
   if (currentPatch !== originalPatch) throw new Error('安装期间 profile 配置发生变化，请检查后重新运行。')
-  const lines = dropEmptyInserts(dropOwnedEntries(currentPatch.split('\n')))
+  const cleaned = dropOwnedEntries(currentPatch.split('\n'))
+  const lines = cleaned.lines
   while (lines.length > 0 && lines.at(-1).trim() === '') lines.pop()
   const nextPatch = lines.length === 0 ? '' : `${lines.join('\n')}\n`
-  const removed = originalPatch.split('\n').filter(line => ownedIdLine.test(line)).length
+  const removed = cleaned.removed
   if (removed > 0) console.log(`已移除 ${removed} 个 llm-chatgpt 配置项：本版本不再声明 provider 路由。`)
   const patchChanged = nextPatch !== currentPatch
   if (patchChanged) writeFileSync(patchFile, nextPatch, { mode: 0o600 })

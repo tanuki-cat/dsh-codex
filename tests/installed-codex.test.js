@@ -69,8 +69,8 @@ test('installed DSH accepts the openai-codex management surface when llm-pi-ai o
   }
 })
 
-/** Without llm-pi-ai there is no flow to drive, so no endpoint is offered. */
-test('installed DSH omits the openai-codex surface when no flow is registered', {
+/** The endpoint remains ready when llm-pi-ai registers its flow later. */
+test('installed DSH registers the surface before its authorization flow', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to run against an installed DSH.',
 }, async () => {
   const require = createRequire(resolve(root, 'package.json'))
@@ -101,9 +101,8 @@ test('installed DSH omits the openai-codex surface when no flow is registered', 
     for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer, WebRuntime]) fibers.push(ctx.plugin(service))
     fibers.push(ctx.plugin(plugin, {}))
     await new Promise(resolve => setImmediate(resolve))
-    // The plugin now owns one endpoint at most; the chatgpt-plan surface went
-    // with the protocol implementation it served.
-    assert.equal(routes.size, 0)
+    assert.equal(routes.size, 1)
+    assert.ok(routes.has('/chatgpt-management/openai-codex'))
   } finally {
     for (const fiber of fibers.reverse()) await fiber.dispose()
     hooks.deregister()

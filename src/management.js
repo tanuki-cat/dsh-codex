@@ -126,8 +126,8 @@ export function trustedManagementRequest(req, token, trustedHosts = []) {
 /**
  * Serve the official openai-codex sign-in to the settings page.
  *
- * The endpoint is registered only where the flow exists, so the page never
- * offers a button that cannot work.
+ * Availability is checked per status request, so registration is independent
+ * of whether llm-pi-ai mounted its flow before or after this plugin.
  * @param ctx - the plugin context carrying webServer and webRuntime.
  * @param manager - the codex management state machine.
  * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.

@@ -16,8 +16,8 @@ hooks.deregister()
 /**
  * A Host double offering only the seams the plugin reads.
  *
- * flow decides whether llm-pi-ai is present: without one there is nothing to
- * sign into, which is the case the plugin must handle by doing nothing.
+ * flow decides whether llm-pi-ai is currently present. The endpoint remains
+ * registered either way so a later flow mount becomes visible without remounting.
  */
 function context({ flow = true } = {}) {
   const routes = new Map()
@@ -53,10 +53,11 @@ test('plugin claims no provider route and no authorization flow of its own', () 
   assert.ok(host.routes.has('/chatgpt-management/openai-codex'))
 })
 
-test('plugin registers nothing when llm-pi-ai offers no openai-codex flow', () => {
+test('plugin registers management independently of authorization flow order', () => {
   const host = context({ flow: false })
   apply(host.ctx)
-  // No flow means no endpoint: the page then shows no button rather than one
-  // that could never complete.
-  assert.equal(host.routes.size, 0)
+  // The status operation decides availability dynamically, allowing llm-pi-ai
+  // to mount after this plugin without requiring a remount.
+  assert.equal(host.routes.size, 1)
+  assert.ok(host.routes.has('/chatgpt-management/openai-codex'))
 })
