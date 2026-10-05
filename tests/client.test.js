@@ -190,6 +190,15 @@ test('only the openai-codex row renders the card', () => {
   }
 })
 
+test('other pi-ai rows never request ChatGPT management status', async () => {
+  const calls = []
+  const environment = { async fetch(url) { calls.push(url); throw new Error('unexpected request') } }
+  const page = browser({ environment }).mount('llama-cpp')
+  await settled()
+  assert.equal(page.tree, null)
+  assert.deepEqual(calls, [])
+})
+
 test('the card styles one injected stylesheet from host tokens instead of inline styles', () => {
   const document = styleDocument()
   const page = browser({ document }).mount()
@@ -296,6 +305,77 @@ test('login keeps its popup while polling a delayed notice and refreshes after a
   assert.equal(closed, 1)
   assert.match(text(page.tree), /After Login/)
   assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
+})
+
+test('polling recovers after a transient status failure without closing the login popup', async () => {
+  const timers = []
+  const calls = []
+  let closed = 0
+  const popup = { location: {}, close() { closed += 1 } }
+  const url = 'https://auth.openai.com/oauth/authorize?x=1'
+  const pending = { state: 'pending', available: true, connected: false, notice: { url } }
+  const environment = {
+    open() { return popup },
+    setTimeout(callback, delay) { const timer = { callback, delay, cancelled: false }; timers.push(timer); return timer },
+    clearTimeout(timer) { timer.cancelled = true },
+    async fetch(path) {
+      const operation = path.split('/').at(-1)
+      calls.push(operation)
+      if (operation === 'status' && calls.length === 3) throw new Error('offline')
+      return { ok: true, async json() {
+        if (operation === 'login') return pending
+        return calls.length === 4 ? connected : { state: 'idle', available: true, connected: false }
+      } }
+    },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  assert.equal(timers[0].delay, 500)
+  await timers[0].callback()
+  assert.equal(timers[1].delay, 1000)
+  assert.equal(closed, 0)
+  assert.equal(popup.location.href, url)
+  assert.deepEqual(controls(page.tree), ['打开浏览器完成授权', '取消登录'])
+  assert.ok(elements(page.tree).some(element => element.props.role === 'alert'))
+  await timers[1].callback()
+  assert.equal(closed, 1)
+  assert.equal(timers.length, 2)
+  assert.deepEqual(calls, ['status', 'login', 'status', 'status'])
+  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
+  assert.equal(elements(page.tree).some(element => element.props.role === 'alert'), false)
+})
+
+test('cancelling or unmounting aborts an in-flight poll without disabling retry', async () => {
+  for (const stop of ['cancel', 'dispose']) {
+    const timers = []
+    let statusReads = 0
+    let pollSignal
+    const environment = {
+      setTimeout(callback) { const timer = { callback, cancelled: false }; timers.push(timer); return timer },
+      clearTimeout(timer) { timer.cancelled = true },
+      async fetch(path, { signal }) {
+        if (path.endsWith('/cancel')) return { ok: true, async json() { return { state: 'cancelled', connected: false } } }
+        if (++statusReads === 1) return { ok: true, async json() { return { state: 'pending', connected: false } } }
+        pollSignal = signal
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+      },
+    }
+    const controller = browser().module.createController({ path: '/chatgpt-management/openai-codex', token: 'test' }, environment)
+    await controller.load()
+    const pendingPoll = timers[0].callback()
+    assert.ok(pollSignal, 'poll must have started')
+    if (stop === 'cancel') {
+      await controller.act('cancel')
+      assert.equal(controller.getSnapshot().status.state, 'cancelled')
+    } else controller.dispose()
+    await pendingPoll
+    assert.equal(pollSignal.aborted, true)
+    assert.equal(timers.length, 1, 'stopped attempts must not schedule another retry')
+    assert.equal(controller.getSnapshot().error, false)
+    controller.dispose()
+  }
 })
 
 test('a blocked popup keeps a clickable authorization link', async () => {

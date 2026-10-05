@@ -16,9 +16,9 @@ export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
  * The official openai-codex sign-in, as the settings page drives it.
  *
  * It owns one attempt at a time, mirroring the seam's own exclusion, so two
- * page tabs cannot prompt the same human twice. Notices are kept as the latest
- * one seen; the page polls them rather than holding a stream open, which keeps
- * the management surface a plain request/response route.
+ * page tabs cannot prompt the same human twice. The latest notice retains
+ * the authorization URL across later progress messages. Polling it instead of
+ * holding a stream open keeps the management surface a plain request/response route.
  * @param ctx - the plugin context carrying the authorization and credential seams.
  * @returns the codex operations the management route exposes.
  */
@@ -58,7 +58,7 @@ export function createCodexManagement(ctx) {
       signal: controller.signal,
       notify(notice) {
         if (active !== attempt) return
-        current = { ...current, notice }
+        current = { ...current, notice: { ...notice, url: notice.url ?? current.notice?.url } }
       },
     }).then(outcome => {
       if (active !== attempt) return

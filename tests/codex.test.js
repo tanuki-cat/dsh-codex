@@ -31,7 +31,7 @@ function codexGrant(overrides = {}) {
 }
 
 /** A Host double exposing only the seams the codex management reads. */
-function host({ flow = true, record } = {}) {
+function host({ flow = true, record, notices = [{ message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' }] } = {}) {
   const storage = store(record === undefined ? [] : [[CODEX_KEY, record]])
   let pending
   return {
@@ -45,7 +45,7 @@ function host({ flow = true, record } = {}) {
           return { key, label: 'OpenAI (ChatGPT Plus/Pro)', methods: [{ id: 'oauth', label: 'Sign in' }], inFlight: Boolean(pending) }
         },
         begin({ signal, interaction }) {
-          interaction.notify({ message: 'Open this page', url: 'https://auth.openai.com/oauth/authorize?x=1' })
+          for (const notice of notices) interaction.notify(notice)
           return new Promise(resolve => {
             pending = {
               async finish() {
@@ -135,6 +135,18 @@ test('login publishes the authorization notice and settles on commit', async () 
   assert.equal(settled.state, 'authorized')
   assert.equal(settled.connected, true)
   await manager.dispose()
+})
+
+test('progress notices do not hide the authorization URL', async () => {
+  const url = 'https://auth.openai.com/oauth/authorize?x=1'
+  const world = host({ notices: [{ message: 'Open this page', url }, { message: 'Waiting for callback' }] })
+  const manager = createCodexManagement(world.ctx)
+  const started = await manager.start()
+  assert.equal(started.notice.message, 'Waiting for callback')
+  assert.equal(started.notice.url, url)
+  assert.equal((await manager.status()).notice.url, url)
+  await manager.cancel()
+  assert.equal((await manager.status()).notice, undefined)
 })
 
 test('cancelling and signing out leave no session behind', async () => {

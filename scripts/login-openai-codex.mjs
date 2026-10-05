@@ -72,7 +72,7 @@ const proxyUrl = await resolveProxy()
 if (proxyUrl) {
   const { ProxyAgent, setGlobalDispatcher } = await import(pathToFileURL(require.resolve('undici')).href)
   setGlobalDispatcher(new ProxyAgent(proxyUrl))
-  console.log('使用代理：' + proxyUrl)
+  console.log('已配置代理。')
 }
 
 const controller = new AbortController()

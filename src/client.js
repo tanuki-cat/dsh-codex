@@ -94,6 +94,7 @@ window.__ModuleLoader__.load({
       const listeners = new Set()
       let disposed = false
       let timer
+      let pollingRequest
       let popup
       let popupUrl
       let sequence = 0
@@ -106,9 +107,10 @@ window.__ModuleLoader__.load({
       const stopPolling = () => {
         if (timer !== undefined) environment.clearTimeout(timer)
         timer = undefined
+        pollingRequest?.abort()
+        pollingRequest = undefined
       }
-      const request = async (operation, method = 'GET') => {
-        const abort = new AbortController()
+      const request = async (operation, method = 'GET', abort = new AbortController()) => {
         requests.add(abort)
         try {
           const response = await environment.fetch(`${connection.path}/${operation}`, {
@@ -119,8 +121,25 @@ window.__ModuleLoader__.load({
           return await response.json()
         } finally { requests.delete(abort) }
       }
+      let pollFailures = 0
+      const schedulePoll = (expected, delay) => {
+        stopPolling()
+        timer = environment.setTimeout(async () => {
+          timer = undefined
+          const abort = new AbortController()
+          pollingRequest = abort
+          try { accept(await request('status', 'GET', abort), expected) }
+          catch {
+            if (disposed || expected !== sequence || abort.signal.aborted) return
+            publish({ busy: false, error: true })
+            pollFailures += 1
+            schedulePoll(expected, Math.min(10_000, 500 * 2 ** pollFailures))
+          } finally { if (pollingRequest === abort) pollingRequest = undefined }
+        }, delay)
+      }
       const accept = (status, expected = sequence) => {
-        if (expected !== sequence) return
+        if (disposed || expected !== sequence) return
+        pollFailures = 0
         publish({ loading: false, busy: false, status, error: false })
         if (popup && status?.notice?.url && popupUrl !== status.notice.url) {
           popup.location.href = status.notice.url
@@ -133,16 +152,7 @@ window.__ModuleLoader__.load({
           popupUrl = undefined
           return
         }
-        stopPolling()
-        timer = environment.setTimeout(async () => {
-          timer = undefined
-          try { accept(await request('status'), expected) }
-          catch {
-            if (expected !== sequence) return
-            popup?.close(); popup = undefined; popupUrl = undefined
-            publish({ busy: false, error: true })
-          }
-        }, 500)
+        schedulePoll(expected, 500)
       }
       return {
         getSnapshot: () => snapshot,
@@ -194,13 +204,14 @@ window.__ModuleLoader__.load({
       const controller = React.useRef()
       const [state, setState] = useState({ loading: true, busy: false, status: undefined, error: false })
       useEffect(() => {
+        if (provider?.provider !== CODEX_ROUTE) return
         if (connection === undefined) { setState(current => ({ ...current, loading: false })); return }
         const instance = createController(connection)
         controller.current = instance
         const off = instance.subscribe(setState)
         void instance.load()
         return () => { off(); instance.dispose(); controller.current = undefined }
-      }, [connection])
+      }, [connection, provider?.provider])
       // The owner passes the row's directory entry; only its route id decides.
       if (connection === undefined || provider?.provider !== CODEX_ROUTE) return null
       const status = state.status
