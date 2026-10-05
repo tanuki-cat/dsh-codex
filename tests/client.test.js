@@ -223,7 +223,7 @@ test('a connected account shows its identity and offers sign-out', async () => {
   assert.match(rendered, /Test Person/)
   assert.match(rendered, /已连接/)
   assert.match(rendered, /plan: plus/)
-  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
+  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
 })
 
 test('an expired credential explains on-demand refresh and offers recovery', async () => {
@@ -233,7 +233,7 @@ test('an expired credential explains on-demand refresh and offers recovery', asy
   assert.match(text(page.tree), /凭据待刷新/)
   assert.match(text(page.tree), /下次模型请求会尝试自动刷新/)
   assert.doesNotMatch(text(page.tree), /已连接/)
-  assert.deepEqual(controls(page.tree), ['重新登录', '退出并撤销会话'])
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录并删除本地凭据'])
 })
 
 test('an incomplete stored grant offers re-login without claiming a connection', async () => {
@@ -241,7 +241,7 @@ test('an incomplete stored grant offers re-login without claiming a connection',
   const page = browser({ environment: api }).mount()
   await settled()
   assert.match(text(page.tree), /凭据不完整/)
-  assert.deepEqual(controls(page.tree), ['重新登录', '退出并撤销会话'])
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录并删除本地凭据'])
 })
 
 test('a disconnected account offers sign-in', async () => {
@@ -304,7 +304,7 @@ test('login keeps its popup while polling a delayed notice and refreshes after a
   assert.equal(popup.opener, null)
   assert.equal(closed, 1)
   assert.match(text(page.tree), /After Login/)
-  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
+  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
 })
 
 test('polling recovers after a transient status failure without closing the login popup', async () => {
@@ -343,7 +343,7 @@ test('polling recovers after a transient status failure without closing the logi
   assert.equal(closed, 1)
   assert.equal(timers.length, 2)
   assert.deepEqual(calls, ['status', 'login', 'status', 'status'])
-  assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
+  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
   assert.equal(elements(page.tree).some(element => element.props.role === 'alert'), false)
 })
 
@@ -399,6 +399,64 @@ test('a blocked popup keeps a clickable authorization link', async () => {
   assert.ok(link, 'the authorization URL is reachable without a popup')
   assert.equal(link.props.href, 'https://auth.openai.com/oauth/authorize?x=1')
   assert.deepEqual(controls(page.tree), ['打开浏览器完成授权', '取消登录'])
+})
+
+test('refocusing an idle page refreshes external credential changes without duplicate requests', async () => {
+  const listeners = new Map()
+  const calls = []
+  let nextStatus = { state: 'idle', available: true, connected: false }
+  let deferRefresh = false
+  let finishRefresh
+  const environment = {
+    addEventListener(name, listener) { listeners.set(name, listener) },
+    removeEventListener(name, listener) { if (listeners.get(name) === listener) listeners.delete(name) },
+    async fetch() {
+      calls.push('status')
+      if (deferRefresh) await new Promise(resolve => { finishRefresh = resolve })
+      return { ok: true, async json() { return nextStatus } }
+    },
+  }
+  const controller = browser().module.createController({ path: '/chatgpt-management/openai-codex', token: 'test' }, environment)
+  await controller.load()
+  assert.equal(controller.getSnapshot().status.connected, false)
+  nextStatus = connected
+  deferRefresh = true
+  const first = listeners.get('focus')()
+  await listeners.get('focus')()
+  assert.deepEqual(calls, ['status', 'status'], 'focus events must share one outstanding refresh')
+  finishRefresh()
+  await first
+  assert.equal(controller.getSnapshot().status.connected, true)
+  controller.dispose()
+  assert.equal(listeners.has('focus'), false)
+})
+
+test('a rejected popup navigation keeps the authorization link and polling available', async () => {
+  let timer
+  let closed = 0
+  const popup = { location: { set href(_url) { throw new Error('navigation refused') } }, close() { closed += 1 } }
+  const url = 'https://auth.openai.com/oauth/authorize?x=1'
+  const environment = {
+    open() { return popup },
+    setTimeout(callback) { timer = callback; return 1 },
+    clearTimeout() { timer = undefined },
+    async fetch(path) {
+      return { ok: true, async json() {
+        if (path.endsWith('/login')) return { state: 'pending', available: true, connected: false, notice: { url } }
+        if (path.endsWith('/status') && closed > 0) return connected
+        return { state: 'idle', available: true, connected: false }
+      } }
+    },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  assert.equal(closed, 1)
+  assert.equal(elements(page.tree).find(element => element.type === 'a').props.href, url)
+  assert.deepEqual(controls(page.tree), ['打开浏览器完成授权', '取消登录'])
+  await timer()
+  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
 })
 
 test('a pending sign-in can be cancelled without starting a second login', async () => {

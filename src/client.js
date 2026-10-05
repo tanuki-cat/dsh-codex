@@ -66,7 +66,7 @@ window.__ModuleLoader__.load({
     const dictionaries = {
       zh: {
         login: '登录 ChatGPT', relogin: '重新登录', disconnected: '未连接 ChatGPT 账户', connected: '已连接', expired: '凭据待刷新', incomplete: '凭据不完整', pending: '等待授权…',
-        loading: '正在加载…', expires: '凭据有效期至', logout: '退出并撤销会话', cancel: '取消登录', open: '打开浏览器完成授权',
+        loading: '正在加载…', expires: '凭据有效期至', logout: '退出登录并删除本地凭据', cancel: '取消登录', open: '打开浏览器完成授权',
         hint: '使用官方 openai-codex 路由。点击登录后浏览器会打开授权页面；完成后此卡片会自动更新。',
         expiredHint: '访问令牌已过期；下次模型请求会尝试自动刷新。若刷新失败，请重新登录。',
         incompleteHint: '已存凭据缺少必要信息，请重新登录。',
@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({
       },
       en: {
         login: 'Sign in to ChatGPT', relogin: 'Sign in again', disconnected: 'No ChatGPT account connected', connected: 'Connected', expired: 'Credential awaiting refresh', incomplete: 'Incomplete credential', pending: 'Waiting for authorization…',
-        loading: 'Loading…', expires: 'Credential valid until', logout: 'Sign out and revoke session', cancel: 'Cancel sign-in', open: 'Open browser to authorize',
+        loading: 'Loading…', expires: 'Credential valid until', logout: 'Sign out and delete local credentials', cancel: 'Cancel sign-in', open: 'Open browser to authorize',
         hint: 'Uses the official openai-codex route. Signing in opens your browser; this card updates once it finishes.',
         expiredHint: 'Access token expired; the next model request will attempt an automatic refresh. Sign in again if it fails.',
         incompleteHint: 'The stored credential is missing required fields. Sign in again.',
@@ -142,8 +142,14 @@ window.__ModuleLoader__.load({
         pollFailures = 0
         publish({ loading: false, busy: false, status, error: false })
         if (popup && status?.notice?.url && popupUrl !== status.notice.url) {
-          popup.location.href = status.notice.url
-          popupUrl = status.notice.url
+          try {
+            popup.location.href = status.notice.url
+            popupUrl = status.notice.url
+          } catch {
+            try { popup.close() } catch {}
+            popup = undefined
+            popupUrl = undefined
+          }
         }
         if (status?.state !== 'pending') {
           stopPolling()
@@ -154,14 +160,20 @@ window.__ModuleLoader__.load({
         }
         schedulePoll(expected, 500)
       }
+      let loadingRequest = false
+      const load = async () => {
+        if (disposed || loadingRequest || snapshot.busy || snapshot.status?.state === 'pending') return
+        loadingRequest = true
+        const expected = sequence
+        try { accept(await request('status'), expected) }
+        catch { if (expected === sequence) publish({ loading: false, error: true }) }
+        finally { loadingRequest = false }
+      }
+      environment.addEventListener?.('focus', load)
       return {
         getSnapshot: () => snapshot,
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-        async load() {
-          const expected = sequence
-          try { accept(await request('status'), expected) }
-          catch { if (expected === sequence) publish({ loading: false, error: true }) }
-        },
+        load,
         async act(operation) {
           const expected = ++sequence
           stopPolling()
@@ -181,6 +193,7 @@ window.__ModuleLoader__.load({
         },
         dispose() {
           disposed = true
+          environment.removeEventListener?.('focus', load)
           stopPolling()
           popup?.close()
           popup = undefined

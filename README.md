@@ -13,7 +13,7 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 - 在模型设置页的 `openai-codex` provider 卡片上渲染登录按钮；
 - 点击后驱动 pi-ai 自己的 OAuth 流程；
 - 显示账户（名称、plan、凭据到期时间）；
-- 提供退出并撤销会话。
+- 提供退出登录并删除本地凭据（不撤销远端会话）。
 
 凭据由 pi-ai 自己的 store 通过 DSH 的 `credentials.modifyRecord` 写入，因此运行中的适配器能观测到提交，无需重启。
 
@@ -31,7 +31,7 @@ node ./scripts/install-local.mjs
 
 ```sh
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.2.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.3.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
