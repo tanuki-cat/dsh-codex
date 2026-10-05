@@ -31,7 +31,7 @@ node ./scripts/install-local.mjs
 
 ```sh
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.1.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.2.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。

@@ -32,9 +32,15 @@ export function createCodexManagement(ctx) {
   async function status() {
     const record = await ctx.credentials.readRecord(CODEX_KEY)
     const account = readCodexAccount(record)
+    const stored = record !== undefined
+    const refreshable = account !== undefined && typeof record?.payload?.refresh === 'string' && record.payload.refresh.length > 0
+    const credentialState = !stored ? 'absent'
+      : !refreshable || !Number.isFinite(account.expires) ? 'incomplete'
+        : account.expires <= Date.now() ? 'expired' : 'unexpired'
     return {
       available: codexFlow(ctx) !== undefined,
-      connected: account !== undefined && typeof record?.payload?.refresh === 'string',
+      connected: credentialState === 'unexpired',
+      credentialState,
       account,
       ...current,
     }

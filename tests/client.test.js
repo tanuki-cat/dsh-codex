@@ -217,6 +217,24 @@ test('a connected account shows its identity and offers sign-out', async () => {
   assert.deepEqual(controls(page.tree), ['退出并撤销会话'])
 })
 
+test('an expired credential explains on-demand refresh and offers recovery', async () => {
+  const api = host({ status: { ...connected, connected: false, credentialState: 'expired' } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  assert.match(text(page.tree), /凭据待刷新/)
+  assert.match(text(page.tree), /下次模型请求会尝试自动刷新/)
+  assert.doesNotMatch(text(page.tree), /已连接/)
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出并撤销会话'])
+})
+
+test('an incomplete stored grant offers re-login without claiming a connection', async () => {
+  const api = host({ status: { available: true, state: 'idle', connected: false, credentialState: 'incomplete' } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  assert.match(text(page.tree), /凭据不完整/)
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出并撤销会话'])
+})
+
 test('a disconnected account offers sign-in', async () => {
   const api = host({ status: { state: 'idle', available: true, connected: false } })
   const page = browser({ environment: api }).mount()

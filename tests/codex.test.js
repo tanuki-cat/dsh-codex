@@ -96,12 +96,29 @@ test('management reports the signed-in account without leaking tokens', async ()
   const manager = createCodexManagement(world.ctx)
   const status = await manager.status()
   assert.equal(status.connected, true)
+  assert.equal(status.credentialState, 'unexpired')
   assert.equal(status.account.plan, 'plus')
   assert.equal(status.account.name, 'Test Person')
   assert.equal(status.account.email, 'person@example.com')
   const serialized = JSON.stringify(status)
   for (const secret of ['test-refresh', 'signature']) assert.equal(serialized.includes(secret), false, secret)
   await manager.dispose()
+})
+
+test('expired and incomplete grants remain stored without reporting a usable access token', async () => {
+  for (const [grant, expected] of [
+    [codexGrant({ expires: Date.now() - 60_000 }), 'expired'],
+    [codexGrant({ refresh: '' }), 'incomplete'],
+    [codexGrant({ expires: undefined }), 'incomplete'],
+  ]) {
+    const manager = createCodexManagement(host({ record: grant }).ctx)
+    const status = await manager.status()
+    assert.equal(status.credentialState, expected)
+    assert.equal(status.connected, false)
+    assert.ok(status.account)
+    assert.equal(JSON.stringify(status).includes('test-refresh'), false)
+  }
+  assert.equal((await createCodexManagement(host().ctx).status()).credentialState, 'absent')
 })
 
 test('login publishes the authorization notice and settles on commit', async () => {

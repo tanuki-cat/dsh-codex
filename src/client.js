@@ -65,15 +65,19 @@ window.__ModuleLoader__.load({
     }
     const dictionaries = {
       zh: {
-        login: '登录 ChatGPT', disconnected: '未连接 ChatGPT 账户', connected: '已连接', pending: '等待授权…',
+        login: '登录 ChatGPT', relogin: '重新登录', disconnected: '未连接 ChatGPT 账户', connected: '已连接', expired: '凭据待刷新', incomplete: '凭据不完整', pending: '等待授权…',
         loading: '正在加载…', expires: '凭据有效期至', logout: '退出并撤销会话', cancel: '取消登录', open: '打开浏览器完成授权',
         hint: '使用官方 openai-codex 路由。点击登录后浏览器会打开授权页面；完成后此卡片会自动更新。',
+        expiredHint: '访问令牌已过期；下次模型请求会尝试自动刷新。若刷新失败，请重新登录。',
+        incompleteHint: '已存凭据缺少必要信息，请重新登录。',
         error: '操作失败，请检查网络与账户权限后重试。',
       },
       en: {
-        login: 'Sign in to ChatGPT', disconnected: 'No ChatGPT account connected', connected: 'Connected', pending: 'Waiting for authorization…',
+        login: 'Sign in to ChatGPT', relogin: 'Sign in again', disconnected: 'No ChatGPT account connected', connected: 'Connected', expired: 'Credential awaiting refresh', incomplete: 'Incomplete credential', pending: 'Waiting for authorization…',
         loading: 'Loading…', expires: 'Credential valid until', logout: 'Sign out and revoke session', cancel: 'Cancel sign-in', open: 'Open browser to authorize',
         hint: 'Uses the official openai-codex route. Signing in opens your browser; this card updates once it finishes.',
+        expiredHint: 'Access token expired; the next model request will attempt an automatic refresh. Sign in again if it fails.',
+        incompleteHint: 'The stored credential is missing required fields. Sign in again.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
       },
     }
@@ -201,15 +205,21 @@ window.__ModuleLoader__.load({
       if (connection === undefined || provider?.provider !== CODEX_ROUTE) return null
       const status = state.status
       const connected = status?.connected === true
+      const expired = status?.credentialState === 'expired'
+      const incomplete = status?.credentialState === 'incomplete'
+      const stored = connected || expired || incomplete
       // The Host answers whether llm-pi-ai offers the flow at all; without it
       // there is nothing this card could sign into.
       if (status !== undefined && status.available === false) return null
       const account = status?.account
       const pending = status?.state === 'pending'
-      const label = state.loading ? t('loading') : connected ? (account?.name || account?.email || t('connected')) : pending ? t('pending') : t('disconnected')
-      const note = connected
-        ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
-        : t('hint')
+      const label = state.loading ? t('loading') : pending ? t('pending')
+        : expired ? t('expired') : incomplete ? t('incomplete')
+          : connected ? (account?.name || account?.email || t('connected')) : t('disconnected')
+      const note = expired ? t('expiredHint') : incomplete ? t('incompleteHint')
+        : connected
+          ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
+          : t('hint')
       const loginUrl = status?.notice?.url
       const button = (text, variant, action) => h('button', {
         type: 'button', className: 'dsh-chatgpt-button', 'data-variant': variant,
@@ -222,16 +232,15 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-chatgpt-lines' },
             h('span', { className: 'dsh-chatgpt-name', role: 'status', 'aria-live': 'polite' },
               h('span', { className: 'dsh-chatgpt-nameText' }, label),
-              connected && h('span', { className: 'dsh-chatgpt-tag', 'data-tone': 'success' }, t('connected'))),
+              connected && !pending && h('span', { className: 'dsh-chatgpt-tag', 'data-tone': 'success' }, t('connected'))),
             note && h('p', { className: 'dsh-chatgpt-note' }, note))),
         loginUrl && h('p', { className: 'dsh-chatgpt-notice' },
           h('a', { className: 'dsh-chatgpt-link', href: loginUrl, target: '_blank', rel: 'noopener noreferrer' }, t('open'))),
         h('div', { className: 'dsh-chatgpt-actions' },
-          connected
-            ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))
-            : pending
-              ? button(t('cancel'), 'danger', () => void controller.current?.act('cancel'))
-              : button(t('login'), 'primary', () => void controller.current?.act('login'))),
+          pending ? button(t('cancel'), 'danger', () => void controller.current?.act('cancel'))
+            : connected ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))
+              : button(t(stored ? 'relogin' : 'login'), 'primary', () => void controller.current?.act('login')),
+          stored && !connected && !pending && h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))),
         state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')))
     }
 
