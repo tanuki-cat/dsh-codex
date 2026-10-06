@@ -66,7 +66,7 @@ const block = [
   routeLine,
   COMMENT_INDENT + '# Catalog route: endpoint, protocol and models come from the installed',
   COMMENT_INDENT + '# pi-ai catalog. No apiKeyEnv, so the stored OAuth sign-in from',
-  COMMENT_INDENT + '# scripts/login-openai-codex.mjs authenticates this route.',
+  COMMENT_INDENT + '# scripts/login-openai-codex.ts authenticates this route.',
   COMMENT_INDENT + 'reasoning: medium',
 ]
 const next = [...lines.slice(0, providersAt + 1), ...block, ...lines.slice(providersAt + 1)]

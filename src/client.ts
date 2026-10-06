@@ -6,9 +6,38 @@
  * sign-in card on the openai-codex row alone. It speaks only to the plugin's
  * own management endpoint.
  *
- * A browser bundle built by hand: DSH delivers client modules as factory
- * sources, and React is the host's external module.
+ * DSH loads the compiled IIFE as a factory; React comes from the host.
  */
+import type * as React from 'react'
+
+type ManagementStatus = {
+  state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
+  available: boolean
+  connected: boolean
+  credentialState?: 'absent' | 'expired' | 'incomplete' | 'unexpired'
+  account?: { name?: string; email?: string; plan?: string; expires?: number }
+  notice?: { url?: string; message?: string }
+}
+type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; error: boolean }
+type Connection = { path: string; token: string }
+type Environment = {
+  fetch: typeof fetch
+  open(url: string, target: string): Window | null
+  setTimeout: typeof setTimeout
+  clearTimeout: typeof clearTimeout
+  addEventListener?: (name: string, callback: () => void) => void
+  removeEventListener?: (name: string, callback: () => void) => void
+}
+type CardProps = { provider?: { provider: string }; t: (key: string) => string }
+type ClientContext = {
+  effect(factory: () => () => void, label: string): void
+  locale: { register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void; bind(namespace: string): (key: string) => string }
+  slots: { inject(name: string, callback: () => void): void; register(entry: { name: string; key: string; locale: string; inject: () => { t: (key: string) => string } }, view: (props: CardProps) => React.ReactNode): void }
+}
+declare global {
+  interface Window { __ModuleLoader__: { load(value: { id: string; factory(require: (id: 'react') => typeof import('react')): object }): void } }
+  var __DSH_CHATGPT_MANAGEMENT__: Record<string, Connection> | undefined
+}
 window.__ModuleLoader__.load({
   id: 'dsh-llm-chatgpt',
   factory(require) {
@@ -89,17 +118,17 @@ window.__ModuleLoader__.load({
      * endpoint last returned. Requests carry the capability the index
      * injection handed this browser and are aborted on unmount.
      */
-    function createController(connection, environment = globalThis) {
-      let snapshot = { loading: true, busy: false, status: undefined, error: false }
-      const listeners = new Set()
+    function createController(connection: Connection, environment: Environment = globalThis as unknown as Environment) {
+      let snapshot: Snapshot = { loading: true, busy: false, status: undefined, error: false }
+      const listeners = new Set<(state: Snapshot) => void>()
       let disposed = false
-      let timer
-      let pollingRequest
-      let popup
-      let popupUrl
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let pollingRequest: AbortController | undefined
+      let popup: Window | undefined
+      let popupUrl: string | undefined
       let sequence = 0
-      const requests = new Set()
-      const publish = patch => {
+      const requests = new Set<AbortController>()
+      const publish = (patch: Partial<Snapshot>) => {
         if (disposed) return
         snapshot = { ...snapshot, ...patch }
         for (const listener of listeners) listener(snapshot)
@@ -110,7 +139,7 @@ window.__ModuleLoader__.load({
         pollingRequest?.abort()
         pollingRequest = undefined
       }
-      const request = async (operation, method = 'GET', abort = new AbortController()) => {
+      const request = async (operation: 'status' | 'login' | 'cancel' | 'logout', method = 'GET', abort = new AbortController()): Promise<ManagementStatus> => {
         requests.add(abort)
         try {
           const response = await environment.fetch(`${connection.path}/${operation}`, {
@@ -118,11 +147,11 @@ window.__ModuleLoader__.load({
             credentials: 'same-origin', redirect: 'error', cache: 'no-store',
           })
           if (!response.ok) throw new Error('ChatGPT management failed')
-          return await response.json()
+          return await response.json() as ManagementStatus
         } finally { requests.delete(abort) }
       }
       let pollFailures = 0
-      const schedulePoll = (expected, delay) => {
+      const schedulePoll = (expected: number, delay: number) => {
         stopPolling()
         timer = environment.setTimeout(async () => {
           timer = undefined
@@ -137,7 +166,7 @@ window.__ModuleLoader__.load({
           } finally { if (pollingRequest === abort) pollingRequest = undefined }
         }, delay)
       }
-      const accept = (status, expected = sequence) => {
+      const accept = (status: ManagementStatus, expected = sequence) => {
         if (disposed || expected !== sequence) return
         pollFailures = 0
         publish({ loading: false, busy: false, status, error: false })
@@ -172,9 +201,9 @@ window.__ModuleLoader__.load({
       environment.addEventListener?.('focus', load)
       return {
         getSnapshot: () => snapshot,
-        subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
+        subscribe(listener: (state: Snapshot) => void) { listeners.add(listener); return () => listeners.delete(listener) },
         load,
-        async act(operation) {
+        async act(operation: 'login' | 'cancel' | 'logout') {
           const expected = ++sequence
           stopPolling()
           // Open synchronously in the user's click stack to avoid popup blockers.
@@ -212,10 +241,10 @@ window.__ModuleLoader__.load({
      * must answer for the one route it signs into. Rendering unconditionally
      * would put a ChatGPT sign-in card on llama-cpp and command-code too.
      */
-    function CodexCard({ provider, t }) {
+    function CodexCard({ provider, t }: CardProps) {
       const connection = (globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {})[CODEX_ROUTE]
-      const controller = React.useRef()
-      const [state, setState] = useState({ loading: true, busy: false, status: undefined, error: false })
+      const controller = React.useRef<ReturnType<typeof createController> | undefined>(undefined)
+      const [state, setState] = useState<Snapshot>({ loading: true, busy: false, status: undefined, error: false })
       useEffect(() => {
         if (provider?.provider !== CODEX_ROUTE) return
         if (connection === undefined) { setState(current => ({ ...current, loading: false })); return }
@@ -245,7 +274,7 @@ window.__ModuleLoader__.load({
           ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
           : t('hint')
       const loginUrl = status?.notice?.url
-      const button = (text, variant, action) => h('button', {
+      const button = (text: string, variant: string, action: () => void) => h('button', {
         type: 'button', className: 'dsh-chatgpt-button', 'data-variant': variant,
         disabled: state.loading || state.busy, onClick: action,
       }, state.busy ? h('span', { className: 'dsh-chatgpt-spinner' }) : null, text)
@@ -268,7 +297,7 @@ window.__ModuleLoader__.load({
         state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')))
     }
 
-    function apply(ctx) {
+    function apply(ctx: ClientContext) {
       ctx.effect(() => mountStyles(), 'chatgpt sign-in styles')
       ctx.effect(() => ctx.locale.register(NS, dictionaries), 'chatgpt sign-in translations')
       const t = ctx.locale.bind(NS)

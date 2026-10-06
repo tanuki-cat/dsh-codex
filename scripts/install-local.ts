@@ -9,12 +9,12 @@
  * It writes only to $DSH_HOME/profiles/<profile>, backs that profile up first,
  * and restores the patch if verification fails.
  */
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from 'node:child_process'
 import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { captureSchemaBaseline, validateInstalledSchema } from './install-validation.mjs'
+import { captureSchemaBaseline, validateInstalledSchema } from './install-validation.ts'
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)))
 const manifest = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'))
@@ -23,11 +23,11 @@ const home = process.env.DSH_HOME ? resolve(process.env.DSH_HOME) : join(homedir
 const directory = join(home, 'profiles', profile)
 const patchFile = join(directory, 'cordis.patch.yml')
 const tarball = join(project, `dsh-llm-chatgpt-${manifest.version}.tgz`)
-const run = (args, options = {}) => spawnSync('dsh', args, { encoding: 'utf8', ...options })
+const run = (args: string[], options: Omit<SpawnSyncOptionsWithStringEncoding, 'encoding'> = {}) => spawnSync('dsh', args, { encoding: 'utf8', ...options })
 const ownedId = /^(?:"llm-chatgpt"|'llm-chatgpt'|llm-chatgpt)\s*(?:#.*)?$/
 
 /** Whether one mapping field at an exact indentation owns this plugin id. */
-function isOwnedIdField(line, indent, item) {
+function isOwnedIdField(line: string, indent: number, item: boolean) {
   if (line.search(/\S/) !== indent) return false
   let value = line.slice(indent)
   if (item) {
@@ -39,13 +39,13 @@ function isOwnedIdField(line, indent, item) {
 }
 
 /** Whether one sequence-item mapping directly identifies this plugin. */
-function ownsEntry(block, indent) {
+function ownsEntry(block: string[], indent: number) {
   return isOwnedIdField(block[0], indent, true)
     || block.slice(1).some(line => isOwnedIdField(line, indent + 2, false))
 }
 
 /** Remove owned children from one top-level `- insert:` operation. */
-function cleanInsert(block) {
+function cleanInsert(block: string[]) {
   const starts = []
   for (let index = 1; index < block.length; index += 1) {
     const match = /^(\s+)-\s*\S/.exec(block[index])
@@ -74,7 +74,7 @@ function cleanInsert(block) {
  * of a top-level insert operation. An unrelated nested object may legally use
  * the same id and must never be deleted by this migration.
  */
-function dropOwnedEntries(lines) {
+function dropOwnedEntries(lines: string[]) {
   const kept = []
   let removed = 0
   for (let index = 0; index < lines.length;) {
@@ -131,7 +131,7 @@ try {
   if (currentPatch !== originalPatch) throw new Error('安装期间 profile 配置发生变化，请检查后重新运行。')
   const cleaned = dropOwnedEntries(currentPatch.split('\n'))
   const lines = cleaned.lines
-  while (lines.length > 0 && lines.at(-1).trim() === '') lines.pop()
+  while (lines.length > 0 && lines.at(-1)?.trim() === '') lines.pop()
   const nextPatch = lines.length === 0 ? '' : `${lines.join('\n')}\n`
   const removed = cleaned.removed
   if (removed > 0) console.log(`已移除 ${removed} 个 llm-chatgpt 配置项：本版本不再声明 provider 路由。`)
@@ -148,14 +148,14 @@ try {
     schemaResult = validateInstalledSchema(baseline, run(['--profile', profile, '--dump-config-schema'], { maxBuffer: 16 * 1024 * 1024 }))
   } catch (error) {
     if (patchChanged) writeFileSync(patchFile, originalPatch, { mode: 0o600 })
-    throw new Error(`${error.message} ${patchChanged ? '已恢复安装前的 patch' : '原有配置未改动'}。插件包仍已安装，备份可用于排查。`)
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${patchChanged ? '已恢复安装前的 patch' : '原有配置未改动'}。插件包仍已安装，备份可用于排查。`)
   }
   console.log(`已将 dsh-llm-chatgpt ${manifest.version} 安装到 web profile，组合配置和插件模块导入检查通过。`)
   if (!schemaResult.complete) console.log('原有 profile 的 schema 导出仍不完整；本插件未引入新增 schema 诊断。')
   console.log('重启 dsh web 后，在「设置 → 模型」的 openai-codex 卡片上点击登录。')
 } catch (error) {
-  console.error(error.code === 'EPERM' || error.code === 'EACCES'
+  console.error((error instanceof Error && 'code' in error && error.code === 'EPERM') || (error instanceof Error && 'code' in error && error.code === 'EACCES')
     ? '当前进程无权写入 web profile，请在本机普通终端中运行此脚本。'
-    : error.message)
+    : error instanceof Error ? error.message : String(error))
   process.exitCode = 1
 }

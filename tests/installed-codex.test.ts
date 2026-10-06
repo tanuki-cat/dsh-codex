@@ -27,7 +27,7 @@ test('installed DSH accepts the openai-codex management surface when llm-pi-ai o
   const { default: LlmRuntime } = await import('@deepseek-ai/dsh-llm')
   const { CredentialProvider } = await import('@deepseek-ai/dsh-credentials')
   const { default: AuthorizationService } = await import('@deepseek-ai/dsh-authorization')
-  const plugin = await import('../src/index.js')
+  const plugin = await import('../lib/index.js')
 
   class MemoryCredentials extends CredentialProvider {
     async readRecord() { return undefined }
@@ -82,7 +82,7 @@ test('installed DSH registers the surface before its authorization flow', {
   const { default: LlmRuntime } = await import('@deepseek-ai/dsh-llm')
   const { CredentialProvider } = await import('@deepseek-ai/dsh-credentials')
   const { default: AuthorizationService } = await import('@deepseek-ai/dsh-authorization')
-  const plugin = await import('../src/index.js')
+  const plugin = await import('../lib/index.js')
   class MemoryCredentials extends CredentialProvider {
     async readRecord() { return undefined }
   }

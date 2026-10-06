@@ -9,6 +9,8 @@
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
+import type { IncomingMessage } from 'node:http'
+import type { CodexContext, ManagementState, WebContext } from './types.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
@@ -22,21 +24,24 @@ export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
  * @param ctx - the plugin context carrying the authorization and credential seams.
  * @returns the codex operations the management route exposes.
  */
-export function createCodexManagement(ctx) {
-  let current = { state: 'idle', notice: undefined, error: undefined }
-  let active
+export function createCodexManagement(ctx: CodexContext) {
+  let current: ManagementState = { state: 'idle' }
+  let active: { controller: AbortController; job?: Promise<void> } | undefined
   let closed = false
-  const publicError = error => error?.name === 'AbortError'
+  const publicError = (error: unknown) => error instanceof Error && error.name === 'AbortError'
     ? 'Sign-in cancelled.'
     : 'Sign-in failed. Check your connection and account permissions, then try again.'
   async function status() {
     const record = await ctx.credentials.readRecord(CODEX_KEY)
     const account = readCodexAccount(record)
     const stored = record !== undefined
-    const refreshable = account !== undefined && typeof record?.payload?.refresh === 'string' && record.payload.refresh.length > 0
+    const payload = record?.kind === 'grant' && typeof record.payload === 'object' && record.payload !== null
+      ? record.payload as Record<string, unknown> : undefined
+    const refreshable = account !== undefined && typeof payload?.refresh === 'string' && payload.refresh.length > 0
+    const expires = account?.expires
     const credentialState = !stored ? 'absent'
-      : !refreshable || !Number.isFinite(account.expires) ? 'incomplete'
-        : account.expires <= Date.now() ? 'expired' : 'unexpired'
+      : !refreshable || typeof expires !== 'number' || !Number.isFinite(expires) ? 'incomplete'
+        : expires <= Date.now() ? 'expired' : 'unexpired'
     return {
       available: codexFlow(ctx) !== undefined,
       connected: credentialState === 'unexpired',
@@ -51,7 +56,7 @@ export function createCodexManagement(ctx) {
       throw new Error('An OpenAI sign-in is already running.')
     }
     const controller = new AbortController()
-    const attempt = { controller, job: undefined }
+    const attempt: { controller: AbortController; job?: Promise<void> } = { controller }
     active = attempt
     current = { state: 'pending', notice: undefined, error: undefined }
     attempt.job = beginCodexLogin(ctx, {
@@ -105,7 +110,7 @@ export function createCodexManagement(ctx) {
  * @param trustedHosts - additional authorities accepted beside loopback.
  * @returns whether the request is trusted.
  */
-export function trustedManagementRequest(req, token, trustedHosts = []) {
+export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, token: string, trustedHosts: readonly string[] = []) {
   const host = req.headers.host
   const authorization = req.headers['x-dsh-chatgpt-token']
   if (typeof host !== 'string' || typeof authorization !== 'string') return false
@@ -138,14 +143,14 @@ export function trustedManagementRequest(req, token, trustedHosts = []) {
  * @param manager - the codex management state machine.
  * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.
  */
-export function registerCodexManagement(ctx, manager) {
+export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typeof createCodexManagement>) {
   const token = randomBytes(32).toString('hex')
   const path = `/chatgpt-management/${CODEX_PROVIDER}`
   ctx.on('webserver/index-inject', table => {
     // A computed index script merges instances without exposing OAuth credentials.
     table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [CODEX_PROVIDER]: { path, token } })});` })
   })
-  const routes = {
+  const routes: Record<string, { method: string; run: () => Promise<unknown> }> = {
     '/status': { method: 'GET', run: () => manager.status() },
     '/login': { method: 'POST', run: () => manager.start() },
     '/cancel': { method: 'POST', run: () => manager.cancel() },
@@ -154,9 +159,9 @@ export function registerCodexManagement(ctx, manager) {
   const dispose = ctx.webServer.register({ kind: 'prefix', path, async handler(req, res) {
     res.setHeader('cache-control', 'no-store')
     res.setHeader('content-type', 'application/json; charset=utf-8')
-    const reply = (code, value) => { res.writeHead(code); res.end(JSON.stringify(value)) }
+    const reply = (code: number, value: unknown) => { res.writeHead(code); res.end(JSON.stringify(value)) }
     if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
-    const operation = new URL(req.url, 'http://127.0.0.1').pathname.slice(path.length)
+    const operation = new URL(req.url ?? '/', 'http://127.0.0.1').pathname.slice(path.length)
     const route = routes[operation]
     if (route === undefined || route.method !== req.method) { reply(405, { error: 'Unsupported management operation.' }); return }
     try {

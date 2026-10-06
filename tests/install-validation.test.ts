@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { captureSchemaBaseline, validateInstalledSchema } from '../scripts/install-validation.mjs'
+import { captureSchemaBaseline, validateInstalledSchema } from '../scripts/install-validation.ts'
 
 // The plugin declares no profile entry, so a healthy install shows no entry
 // under its id at all; a broken import is what would produce one.

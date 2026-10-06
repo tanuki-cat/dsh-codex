@@ -37,7 +37,7 @@ const installed = dshRoot()
 const require = createRequire(join(installed, 'package.json'))
 // pi-ai's exports map omits ./auth/*, so its OAuth module is reached by path.
 const piDir = join(installed, 'node_modules', '@earendil-works', 'pi-ai')
-const piModule = specifier => import(pathToFileURL(join(piDir, 'dist', specifier)).href)
+const piModule = (specifier: string) => import(pathToFileURL(join(piDir, 'dist', specifier)).href)
 
 const { openaiCodexOAuth } = await piModule('auth/oauth/openai-codex.js')
 const { withFileLock, writeFileAtomic } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-atomic-write')).href)
@@ -81,12 +81,12 @@ process.on('SIGINT', () => controller.abort())
 /** Answer pi-ai's method choice and let the loopback callback win the race. */
 const interaction = {
   signal: controller.signal,
-  notify(event) {
+  notify(event: { type: 'auth_url' | 'info' | 'progress' | 'device_code'; url?: string; message?: string; verificationUri?: string; userCode?: string }) {
     if (event.type === 'auth_url') console.log('\n在浏览器中完成登录：\n' + event.url + '\n')
     else if (event.type === 'info' || event.type === 'progress') console.log(event.message)
     else if (event.type === 'device_code') console.log('在 ' + event.verificationUri + ' 输入代码：' + event.userCode)
   },
-  async prompt(request) {
+  async prompt(request: { type: string; options: Array<{ id: string }>; signal?: AbortSignal }) {
     if (request.type === 'select') return request.options[0].id
     // The manual-code prompt races the loopback callback; keeping it pending
     // lets whichever finishes first win, exactly as the browser flow intends.

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const project = fileURLToPath(new URL('..', import.meta.url))
-const installer = fileURLToPath(new URL('../scripts/install-local.mjs', import.meta.url))
+const installer = fileURLToPath(new URL('../scripts/install-local.ts', import.meta.url))
 const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 const tarballName = 'dsh-llm-chatgpt-' + version + '.tgz'
 const ownedEntries = patch => (patch.match(/^\s*-?\s*id: llm-chatgpt\s*$/gm) ?? []).length
@@ -27,7 +27,7 @@ function fixture() {
   writeFileSync(join(profile, 'node_modules/dsh-llm-chatgpt/package.json'), JSON.stringify({ version }))
   const original = '- insert:\n    - id: prior-plugin\n      name: prior-plugin\n      config:\n        value: TEST_PRIVATE_VALUE\n'
   writeFileSync(join(profile, 'cordis.patch.yml'), original)
-  copyFileSync(new URL('./fixtures/dsh-install-cli.mjs', import.meta.url), join(bin, 'dsh'))
+  copyFileSync(new URL('./fixtures/dsh-install-cli.ts', import.meta.url), join(bin, 'dsh'))
   chmodSync(join(bin, 'dsh'), 0o700)
   // The installer resolves its input as <project>/dsh-llm-chatgpt-<version>.tgz,
   // so a test of its own logic would otherwise depend on npm pack having run —

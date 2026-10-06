@@ -62,7 +62,7 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
     },
     document, AbortController, ...environment,
   }
-  runInNewContext(readFileSync(new URL('../src/client.js', import.meta.url), 'utf8'), {
+  runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), {
     ...sandbox, window: { __ModuleLoader__: { load(value) { registration = value } } },
   })
   assert.equal(registration.id, 'dsh-llm-chatgpt')

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
-import { store } from './helpers.js'
+import { store } from './helpers.ts'
 
 // These doubles validate the plugin's host calls, not a real Cordis boot: the
 // credential key grammar is the one fact this module borrows from the host.
@@ -11,8 +11,8 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, readCodexAccount } = await import('../src/codex.js')
-const { createCodexManagement, registerCodexManagement } = await import('../src/management.js')
+const { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, readCodexAccount } = await import('../lib/codex.js')
+const { createCodexManagement, registerCodexManagement } = await import('../lib/management.js')
 hooks.deregister()
 
 /** A stored grant shaped like the one pi-ai's OAuth flow commits. */

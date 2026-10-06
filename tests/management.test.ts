@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
-import { store } from './helpers.js'
+import { store } from './helpers.ts'
 
 // The management surface imports the codex adapter, which addresses credential
 // records through the host's key grammar; that one import is doubled here.
@@ -11,7 +11,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { registerCodexManagement, trustedManagementRequest } = await import('../src/management.js')
+const { registerCodexManagement, trustedManagementRequest } = await import('../lib/management.js')
 hooks.deregister()
 
 test('management protects against wrong capability, cross-site origins and DNS rebinding', () => {

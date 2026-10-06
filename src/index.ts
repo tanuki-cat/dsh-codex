@@ -13,11 +13,12 @@
  * @module dsh-llm-chatgpt
  */
 import { createCodexManagement, registerCodexManagement } from './management.js'
+import type { PluginContext } from './types.js'
 
 export const name = 'llm-chatgpt'
 export const inject = ['credentials', 'authorization']
 
-export function apply(ctx) {
+export function apply(ctx: PluginContext) {
   // Register independently of flow mount order. The status operation checks
   // availability dynamically, and the client hides the card until llm-pi-ai
   // offers the flow.

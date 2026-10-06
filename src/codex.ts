@@ -12,6 +12,9 @@
  * @module dsh-llm-chatgpt/codex
  */
 import { credentialKey } from '@deepseek-ai/dsh-credentials'
+import type { CredentialRecord } from '@deepseek-ai/dsh-credentials/types'
+import type { AuthorizationNotice } from '@deepseek-ai/dsh-authorization/types'
+import type { CodexContext } from './types.js'
 
 /** Credential record the llm-pi-ai adapter reads for one pi-ai provider id. */
 export const CODEX_PROVIDER = 'openai-codex'
@@ -27,15 +30,17 @@ export const CODEX_SETTINGS_NS = 'llm-pi-ai'
  * @param record - the stored credential record, or undefined.
  * @returns display facts, or undefined when nothing is stored.
  */
-export function readCodexAccount(record) {
-  const payload = record?.kind === 'grant' ? record.payload : undefined
+export function readCodexAccount(record: CredentialRecord | undefined) {
+  const payload = record?.kind === 'grant' && typeof record.payload === 'object' && record.payload !== null
+    ? record.payload as Record<string, unknown> : undefined
   if (payload === undefined || typeof payload.access !== 'string') return undefined
   const parts = payload.access.split('.')
   const claims = parts.length === 3 ? decode(parts[1]) : undefined
   const auth = claims?.['https://api.openai.com/auth']
   const profile = claims?.['https://api.openai.com/profile']
   return {
-    accountId: typeof payload.accountId === 'string' ? payload.accountId : auth?.chatgpt_account_id,
+    accountId: typeof payload.accountId === 'string' ? payload.accountId
+      : typeof auth?.chatgpt_account_id === 'string' ? auth.chatgpt_account_id : undefined,
     name: typeof profile?.name === 'string' ? profile.name : undefined,
     email: typeof profile?.email === 'string' ? profile.email : undefined,
     plan: typeof auth?.chatgpt_plan_type === 'string' ? auth.chatgpt_plan_type : undefined,
@@ -44,8 +49,11 @@ export function readCodexAccount(record) {
 }
 
 /** Decode one base64url JWT segment, or undefined when it is not JSON. */
-function decode(segment) {
-  try { return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) } catch { return undefined }
+function decode(segment: string): Record<string, Record<string, unknown>> | undefined {
+  try {
+    const value: unknown = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'))
+    return typeof value === 'object' && value !== null ? value as Record<string, Record<string, unknown>> : undefined
+  } catch { return undefined }
 }
 
 /**
@@ -56,7 +64,7 @@ function decode(segment) {
  * @param ctx - the plugin context carrying `ctx.authorization`.
  * @returns the entry, or undefined when no flow claims the key.
  */
-export function codexFlow(ctx) {
+export function codexFlow(ctx: CodexContext) {
   return ctx.authorization.describe(CODEX_KEY)
 }
 
@@ -71,7 +79,7 @@ export function codexFlow(ctx) {
  * @param options - notice sink and the attempt's lifetime.
  * @returns the outcome status.
  */
-export async function beginCodexLogin(ctx, { notify, signal }) {
+export async function beginCodexLogin(ctx: CodexContext, { notify, signal }: { notify: (notice: AuthorizationNotice) => void; signal: AbortSignal }) {
   const flow = codexFlow(ctx)
   if (flow === undefined) {
     throw new Error('llm-pi-ai does not offer an openai-codex sign-in in this composition.')
@@ -101,7 +109,7 @@ export async function beginCodexLogin(ctx, { notify, signal }) {
 }
 
 /** Remove the stored sign-in, which the adapter treats as signed out. */
-export async function forgetCodexLogin(ctx) {
+export async function forgetCodexLogin(ctx: CodexContext) {
   await ctx.authorization.cancel(CODEX_KEY)
   await ctx.credentials.deleteRecord(CODEX_KEY)
 }

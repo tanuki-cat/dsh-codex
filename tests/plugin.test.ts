@@ -10,7 +10,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { apply, inject, name } = await import('../src/index.js')
+const { apply, inject, name } = await import('../lib/index.js')
 hooks.deregister()
 
 /**

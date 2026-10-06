@@ -10,12 +10,21 @@
  * id, which is exactly what this comparison reports.
  */
 
+import type { SpawnSyncReturns } from 'node:child_process'
+
+type SchemaDump = {
+  complete: boolean
+  entries: Array<{ path: string; id: string; name: string; status: string }>
+  diagnostics: Array<{ level: string; path: string; message: string }>
+}
+type DumpResult = Pick<SpawnSyncReturns<string>, 'status' | 'stdout'> & { error?: Error }
+
 /** The entry id and package name an install of this plugin owns. */
 const PLUGIN_ID = 'llm-chatgpt'
 const PLUGIN_NAME = 'dsh-llm-chatgpt'
 
-function schemaDump(result) {
-  if (result.error || ![0, 1].includes(result.status)) throw new Error('Schema 导出命令异常，无法验证插件导入。')
+function schemaDump(result: DumpResult): SchemaDump {
+  if (result.error || (result.status !== 0 && result.status !== 1)) throw new Error('Schema 导出命令异常，无法验证插件导入。')
   let metadata
   try { metadata = JSON.parse(result.stdout)['x-cordis'] } catch {
     throw new Error('Schema 导出未返回 JSON；请在本机执行 dsh --profile web --dump-config-schema 查看诊断。')
@@ -24,10 +33,10 @@ function schemaDump(result) {
     || !Array.isArray(metadata.diagnostics) || (result.status === 1 && metadata.complete)) {
     throw new Error('Schema 导出结果无效，无法验证插件导入。')
   }
-  return metadata
+  return metadata as SchemaDump
 }
 
-function issues(metadata) {
+function issues(metadata: SchemaDump) {
   return [
     ...metadata.diagnostics.map(({ level, path, message }) => JSON.stringify(['diagnostic', level, path, message])),
     ...metadata.entries.filter(entry => ['partial', 'unsupported', 'error'].includes(entry.status))
@@ -35,11 +44,11 @@ function issues(metadata) {
   ]
 }
 
-export function captureSchemaBaseline(result) {
+export function captureSchemaBaseline(result: DumpResult) {
   return schemaDump(result)
 }
 
-export function validateInstalledSchema(baseline, result) {
+export function validateInstalledSchema(baseline: SchemaDump, result: DumpResult) {
   const metadata = schemaDump(result)
   // A partial or failed entry under the plugin's own id is the one shape that
   // means its module did not import cleanly.

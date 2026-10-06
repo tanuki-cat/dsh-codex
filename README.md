@@ -17,12 +17,16 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 凭据由 pi-ai 自己的 store 通过 DSH 的 `credentials.modifyRecord` 写入，因此运行中的适配器能观测到提交，无需重启。
 
+## 开发与构建
+
+源码、辅助脚本和测试均使用 TypeScript；`npm run check` 严格检查插件及脚本，`npm run build` 使用 tsdown 构建服务端 ESM 和客户端 IIFE。客户端产物保留 DSH 的 `__ModuleLoader__.load` factory 协议，`lib/` 中的 JavaScript 与类型声明由构建生成，不手写或提交。`npm pack` 会先运行类型检查与构建。辅助脚本在 Node 22.19+ 下以 `--experimental-strip-types` 运行。
+
 ## 安装
 
 本机 `web` profile 可在普通终端执行安装脚本：
 
 ```sh
-node ./scripts/install-local.mjs
+node --experimental-strip-types ./scripts/install-local.ts
 ```
 
 脚本调用 `dsh plugin` 安装当前包，已安装同版本时跳过；先备份 profile 配置，再移除早期版本遗留的 `llm-chatgpt` 配置项（0.3.0 起本插件不再声明 provider 路由，残留项会指向无人服务的路由），最后检查组合配置与插件模块导入。它不启动 Web 服务、不调用模型、不进行登录。
@@ -30,8 +34,9 @@ node ./scripts/install-local.mjs
 也可以手动安装：
 
 ```sh
+npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.3.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.4.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -60,7 +65,7 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 ## 辅助脚本
 
-`scripts/login-openai-codex.mjs` 和 `scripts/add-openai-codex-route.mjs` 是为没有设置页入口的旧版环境保留的手工排障工具，当前安装流程不会调用。正常使用优先通过模型设置页登录并用「从目录添加」声明路由。
+`scripts/login-openai-codex.ts` 和 `scripts/add-openai-codex-route.ts` 是为没有设置页入口的旧版环境保留的手工排障工具，当前安装流程不会调用。正常使用优先通过模型设置页登录并用「从目录添加」声明路由。
 
 ## 首版限制
 
@@ -70,9 +75,9 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 ## 验证范围
 
-`npm test` 使用 Node 内建测试运行器。`tests/codex.test.js` 覆盖 flow 缺失、登录通知、提交后状态、取消与退出、令牌不泄漏与 capability 校验；`tests/client.test.js` 用模拟模块加载器渲染真实 factory，覆盖卡片只在 `openai-codex` 行渲染、样式表生命周期、已连接 / 未连接 / 无 flow / 接口失败四种状态，以及授权 URL 延迟到达、状态轮询、popup 回退与取消入口。
+`npm run check` 对插件与辅助脚本做严格类型检查；`npm test` 先用 tsdown 构建，再使用 Node 内建测试运行器。`tests/codex.test.ts` 覆盖 flow 缺失、登录通知、提交后状态、取消与退出、令牌不泄漏与 capability 校验；`tests/client.test.ts` 用模拟模块加载器渲染真实 factory，覆盖卡片只在 `openai-codex` 行渲染、样式表生命周期、已连接 / 未连接 / 无 flow / 接口失败四种状态，以及授权 URL 延迟到达、状态轮询、popup 回退与取消入口。
 
-`tests/installed-codex.test.js` 通过 `DSH_INSTALL_ROOT` 指定安装目录，用真实 `AuthorizationService` 与 `webServer` 验证端点注册与 index 注入：
+`tests/installed-codex.test.ts` 通过 `DSH_INSTALL_ROOT` 指定安装目录，用真实 `AuthorizationService` 与 `webServer` 验证端点注册与 index 注入：
 
 ```sh
 DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
