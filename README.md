@@ -36,7 +36,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.7.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.8.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -54,7 +54,11 @@ dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.7.tgz
 
 已登录且宿主提供可写设置时，卡片上的「检查缺失模型」会以当前 OAuth 账号只读查询 Codex 模型目录，将可见、能力信息足够的条目与现有可选模型比较。预览无写入；仅在点击「确认补充缺失模型」后通过宿主设置服务写入。响应不向页面传输 OAuth 令牌；网络或模型来源不可用时**不使用旧 pi-ai catalog 猜测新增模型**，原配置保持不变。
 
-补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。写入后若要撤回，请先在宿主模型设置中检查并编辑显式模型列表；当前版本不提供自动回退。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。当前目录请求使用经本机检查的 Codex CLI `0.160.1` 作为 `client_version`；后续版本需要复核并更新该值。只读的已登录 Codex 账号目录已确认包含 `gpt-6.1-sol`；该模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露其已知等级并在预览中说明。通过 DSH 路由的端到端请求仍须验证。
+补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。写入后若要撤回，请先在宿主模型设置中检查并编辑显式模型列表；当前版本不提供自动回退。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。当前目录请求使用经本机检查的 Codex CLI `0.160.1` 作为 `client_version`；后续版本需要复核并更新该值。部分新模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露宿主认识的等级，并在预览中以「未支持推理等级」列出被省略的等级。
+
+上下文容量取**来源的 `max_context_window`**（账号可声明的上限），缺失时回退 `context_window`。原因是端点同时返回两者：`context_window`（如 272000）是长上下文**计费档位**的起点，不是可用上限；把它当作窗口会让宿主远早于账号能力触发压缩。已显式写入的 `contextWindow` 不会被改写，若低于来源可用值，预览会以「声明的上下文小于来源可用值」提示，由你决定是否调整。
+
+已实测：插件以 DSH 存储的 OAuth 凭据可读取账号目录（HTTP 200，10 条，其中 7 条能力信息完整），且 `gpt-6.1-sol` 已在该路由上完成实际推理。验证细节与剩余偏差见 [实施方案](docs/design-task-feature-codex-missing-model-patches.md)。
 
 ## 网络
 
@@ -83,13 +87,17 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 `npm run check` 对插件与辅助脚本做严格类型检查；`npm test` 先用 tsdown 构建，再使用 Node 内建测试运行器。`tests/codex.test.ts` 覆盖 flow 缺失、登录通知、提交后状态、取消与退出、令牌不泄漏与 capability 校验；`tests/client.test.ts` 用模拟模块加载器渲染真实 factory，覆盖卡片只在 `openai-codex` 行渲染、样式表生命周期、已连接 / 未连接 / 无 flow / 接口失败四种状态，以及授权 URL 延迟到达、状态轮询、popup 回退与取消入口。
 
-`tests/installed-codex.test.ts` 通过 `DSH_INSTALL_ROOT` 指定安装目录，用真实 `AuthorizationService` 与 `webServer` 验证端点注册与 index 注入：
+`tests/installed-codex.test.ts` 通过 `DSH_INSTALL_ROOT` 指定安装目录，用真实 `AuthorizationService` 与 `webServer` 验证端点注册与 index 注入；`tests/model-patches.test.ts` 覆盖远端列表解析、保真合并、revision 冲突、降级拒写与各条安全失败分支；`tests/installed-model-patches.test.ts` 挂载真实 `dsh-llm-pi-ai` 适配器与真实模型解析器，验证补丁结果能通过宿主 `Config` schema、写入后模型可解析（补丁前为 `UNKNOWN_MODEL`）、目录模型不丢失、热更新生效与幂等：
 
 ```sh
 DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 ```
 
-**未验证**：真实浏览器点击完成一次 OAuth 授权。上述测试证明了端点注册、flow 发现、凭据读写路径与宿主服务接受度，但浏览器里点下去那一下仍需人工确认。
+后一条命令在末项为 **65 项全部通过**；不指定 `DSH_INSTALL_ROOT` 时其中 4 项跳过（61 通过）。
+
+另有断言覆盖令牌不外泄：驱动全部管理路由并检查每个响应体与 index 注入脚本，OAuth access/refresh 与签名均不出现。
+
+**未覆盖**：真实 `SettingsForms` 的设置写入本身——它需要完整 Loader 与 profile-boot 链，测试中的设置服务仍是替身，因此「`configEditor.edit` 真正落盘到 `cordis.patch.yml`」由宿主而非本插件的测试保证。来源列表的服务端更新频率需要跨时间采样，单次实现无法证明。真实浏览器点击完成一次 OAuth 授权与人工回退操作同样未留存记录。
 
 ## 与 0.2.x 的区别
 

@@ -11,7 +11,8 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { registerCodexManagement, trustedManagementRequest } = await import('../lib/management.js')
+const { createCodexManagement, registerCodexManagement, trustedManagementRequest } = await import('../lib/management.js')
+const { PatchError } = await import('../lib/model-patches.js')
 hooks.deregister()
 
 test('management protects against wrong capability, cross-site origins and DNS rebinding', () => {
@@ -53,7 +54,21 @@ test('management routes require the injected capability and POST for state chang
     on(_event, callback) { inject = callback },
     effect(callback) { cleanup = callback() },
   }
-  const patch = { async preview() { return { added: ['gpt-6.1-sol'], signature: 'a'.repeat(64) } }, async apply(signature) { assert.equal(signature, 'a'.repeat(64)); return { applied: ['gpt-6.1-sol'] } } }
+  // The route reports the reason the patch layer decided, so the page can name
+  // the remedy instead of collapsing every refusal into "source unavailable".
+  let refusal
+  const patch = {
+    async preview() {
+      if (refusal) throw new PatchError(refusal, 'refused for the test')
+      return { added: ['gpt-6.1-sol'], signature: 'a'.repeat(64) }
+    },
+    async fallback(reason) { return { unavailable: 'listing unavailable', reason, added: [] } },
+    async apply(signature) {
+      if (refusal) throw new PatchError(refusal, 'refused for the test')
+      assert.equal(signature, 'a'.repeat(64))
+      return { applied: ['gpt-6.1-sol'] }
+    },
+  }
   registerCodexManagement(web, manager, () => patch)
   const table = []
   inject(table)
@@ -75,6 +90,93 @@ test('management routes require the injected capability and POST for state chang
   assert.equal((await request('/models-preview', 'GET', 'wrong')).code, 403)
   assert.deepEqual((await request('/models-preview', 'GET')).body.added, ['gpt-6.1-sol'])
   assert.equal((await request('/models-apply', 'POST')).code, 400)
+  // A malformed confirmation is reported as a conflict, not as a source failure.
+  assert.equal((await request('/models-apply', 'POST', token, 'nope')).body.reason, 'conflict')
   assert.deepEqual((await request('/models-apply', 'POST', token, 'a'.repeat(64))).body.applied, ['gpt-6.1-sol'])
+
+  // Each refusal reason survives the route: the read-only fallback keeps the
+  // reason it was refused for, and the status code separates a stale
+  // confirmation (409) from every other refusal (400).
+  for (const [reason, code, operation, method] of [
+    ['route-missing', 200, '/models-preview', 'GET'],
+    ['settings-read-only', 200, '/models-preview', 'GET'],
+    ['registration-unconfirmed', 400, '/models-apply', 'POST'],
+    ['conflict', 409, '/models-apply', 'POST'],
+  ]) {
+    refusal = reason
+    const answer = await request(operation, method, token, 'a'.repeat(64))
+    assert.equal(answer.code, code, reason)
+    assert.equal(answer.body.reason, reason, reason)
+    // A refusal never proposes an addition, whichever layer reported it.
+    assert.ok(!answer.body.added || answer.body.added.length === 0, reason)
+  }
+  refusal = undefined
+  await cleanup()
+})
+
+test('no route response or injected script ever carries the stored OAuth credential', async () => {
+  let route, inject, cleanup
+  const pending = {}
+  const world = store()
+  // A grant whose every field is a distinct sentinel, so any leak is nameable.
+  const ACCESS = 'sentinel-access-token'
+  const REFRESH = 'sentinel-refresh-token'
+  const SIGNATURE = 'sentinel-signature'
+  await world.modifyRecord('llm-pi-ai/openai-codex', () => ({
+    kind: 'grant',
+    payload: { type: 'oauth', access: `header.${'e30'}.sentinel-signature`, refresh: REFRESH, accountId: 'account-sentinel', expires: Date.now() + 60_000 },
+  }))
+  const ctx = {
+    credentials: world,
+    authorization: {
+      describe() { return { inFlight: Boolean(pending.value) } },
+      begin() { pending.value = {}; return new Promise(() => {}) },
+      cancel() { pending.value = undefined },
+    },
+  }
+  const manager = createCodexManagement(ctx)
+  const web = {
+    webRuntime: { trustedHosts: [] },
+    webServer: { register(value) { route = value; return () => {} } },
+    on(_event, callback) { inject = callback },
+    effect(callback) { cleanup = callback() },
+  }
+  const patch = {
+    async preview() { return { added: ['gpt-6.1-sol'], preserved: [], total: 1, unsupported: 0, signature: 'a'.repeat(64), source: 'https://chatgpt.com/backend-api/codex/models' } },
+    async fallback(reason) { return { unavailable: 'unavailable', reason, added: [] } },
+    async apply() { return { applied: ['gpt-6.1-sol'] } },
+  }
+  registerCodexManagement(web, manager, () => patch)
+  const table = []
+  inject(table)
+  // Everything the browser receives: the injected index script and each reply.
+  const received = [table.map(entry => entry.text).join('\n')]
+  const token = /"token":"([a-f0-9]+)"/.exec(table[0].text)[1]
+  async function request(operation, method, signature) {
+    let body
+    await route.handler({ url: route.path + operation, method, headers: { host: '127.0.0.1:8080', 'x-dsh-chatgpt-token': token, 'x-dsh-model-patch': signature } }, {
+      setHeader() {}, writeHead() {}, end(value) { body = value },
+    })
+    received.push(body)
+    return body
+  }
+  for (const [operation, method, signature] of [
+    ['/status', 'GET'], ['/login', 'POST'], ['/cancel', 'POST'], ['/logout', 'POST'],
+    ['/models-preview', 'GET'], ['/models-apply', 'POST', 'a'.repeat(64)],
+  ]) await request(operation, method, signature)
+
+  const whole = received.join('\n')
+  // Tokens never leave the server, on any route.
+  for (const secret of [ACCESS, REFRESH, SIGNATURE]) {
+    assert.equal(whole.includes(secret), false, secret)
+  }
+  // The account id is not a token: it identifies the signed-in account, the
+  // same fact the card already shows. It is the only credential-derived value
+  // that rides, and it is asserted here so a later change cannot widen it.
+  assert.equal(whole.includes('account-sentinel'), true)
+  // The capability token is the one credential the browser is given, and the
+  // access token must not ride in that same script.
+  assert.match(received[0], /"token":"[a-f0-9]{64}"/)
+  assert.doesNotMatch(received[0], /access|refresh/i)
   await cleanup()
 })

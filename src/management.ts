@@ -11,9 +11,26 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
 import type { IncomingMessage } from 'node:http'
 import type { CodexContext, ManagementState, WebContext } from './types.js'
-import type { createModelPatches } from './model-patches.js'
+import type { PatchReason, createModelPatches } from './model-patches.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
+
+/** The reason code a refusal carries, or the generic one when it carries none. */
+function reasonOf(error: unknown): PatchReason {
+  const reason = error instanceof Error && 'reason' in error ? (error as { reason?: unknown }).reason : undefined
+  return typeof reason === 'string' ? reason as PatchReason : 'source-unavailable'
+}
+
+/**
+ * A refusal body: a stable reason code plus a diagnostic message.
+ *
+ * The message is the server's own wording for logs and bug reports; the page
+ * renders its own localized copy from the code. Neither ever carries a
+ * credential — every source of these strings is a fixed message or a status.
+ */
+function refusal(reason: PatchReason, message?: string) {
+  return { error: message ?? 'Model patch refused.', reason }
+}
 
 /**
  * The official openai-codex sign-in, as the settings page drives it.
@@ -165,23 +182,31 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
     if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
     const operation = new URL(req.url ?? '/', 'http://127.0.0.1').pathname.slice(path.length)
     const route = routes[operation]
+    const patch = patches?.()
     if (operation === '/models-preview' && req.method === 'GET') {
-      try { reply(200, await patches?.()?.preview() ?? { unavailable: 'Model settings are unavailable.' }) }
-      catch {
-        try { reply(200, await patches?.()?.fallback() ?? { unavailable: 'Model settings are unavailable.' }) }
-        catch { reply(503, { error: 'Codex model listing and installed catalog are unavailable.' }) }
+      if (!patch) { reply(503, refusal('settings-unavailable')); return }
+      try { reply(200, await patch.preview()); return }
+      catch (error) {
+        // The refusal reason travels with the read-only view, so the page can
+        // name the remedy instead of reporting every cause as "unavailable".
+        const reason = reasonOf(error)
+        const detail = error instanceof Error ? error.message : undefined
+        try { reply(200, await patch.fallback(reason)); return }
+        catch { reply(503, refusal(reason, detail)); return }
       }
-      return
     }
     if (operation === '/models-apply' && req.method === 'POST') {
-      try {
-        const signature = req.headers['x-dsh-model-patch']
-        if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) { reply(400, { error: 'Invalid confirmation.' }); return }
-        const patch = patches?.()
-        if (!patch) { reply(503, { error: 'Model settings are unavailable.' }); return }
-        reply(200, await patch.apply(signature))
-      } catch { reply(409, { error: 'Model source or configuration changed; preview again before applying.' }) }
-      return
+      if (!patch) { reply(503, refusal('settings-unavailable')); return }
+      const signature = req.headers['x-dsh-model-patch']
+      if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) { reply(400, refusal('conflict')); return }
+      try { reply(200, await patch.apply(signature)); return }
+      catch (error) {
+        const reason = reasonOf(error)
+        // A stale confirmation is the caller's to redo; every other refusal is
+        // reported as it happened rather than as a generic conflict.
+        reply(reason === 'conflict' ? 409 : 400, refusal(reason, error instanceof Error ? error.message : undefined))
+        return
+      }
     }
     if (route === undefined || route.method !== req.method) { reply(405, { error: 'Unsupported management operation.' }); return }
     try {

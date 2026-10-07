@@ -21,7 +21,32 @@ type ManagementStatus = {
 }
 type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; error: boolean }
 type Connection = { path: string; token: string }
-type PatchPreview = { added: string[]; preserved: string[]; total: number; unsupported: number; limited?: { id: string; omittedEfforts: string[] }[]; source: string; signature: string; unavailable?: string }
+type PatchReason = 'settings-unavailable' | 'settings-read-only' | 'route-missing' | 'sign-in-required'
+  | 'credential-expired' | 'credential-incomplete' | 'source-unavailable' | 'config-unmergeable'
+  | 'conflict' | 'registration-unconfirmed'
+type PatchPreview = {
+  added: string[]
+  preserved: string[]
+  total: number
+  unsupported: number
+  limited?: { id: string; omittedEfforts: string[] }[]
+  source: string
+  signature: string
+  unavailable?: string
+  reason?: PatchReason
+  fetchedAt?: number
+  clientVersion?: string
+  current?: number
+  alreadySelectable?: string[]
+  unlisted?: string[]
+  understated?: { id: string; declared: number; source: number }[]
+  replacesCatalog?: boolean
+}
+type PatchApplied = PatchPreview & {
+  applied: string[]
+  before?: { revision?: number; models?: string[] }
+  after?: { revision?: number; models?: string[] }
+}
 type Environment = {
   fetch: typeof fetch
   open(url: string, target: string): Window | null
@@ -112,6 +137,9 @@ window.__ModuleLoader__.load({
         incompleteHint: '已存凭据缺少必要信息，请重新登录。',
         error: '操作失败，请检查网络与账户权限后重试。',
         patchPreview: '检查缺失模型', patchApply: '确认补充缺失模型', patchEmpty: '没有可补充的模型', patchError: '无法安全获取或应用 Codex 模型列表，请稍后重试。', patchCount: '拟补充模型', patchPreserved: '保留模型', patchUnverified: '待核实', patchFallback: '远端目录不可用，以下仅为本机目录；未写入补丁', patchLimited: '未支持推理等级', patchTotal: '远端条目', patchDetails: '查看模型与来源详情', logoutShort: '退出登录', plan: '订阅',
+        patchSelected: '当前可选', patchSourceAt: '列表获取于', patchClient: '请求版本', patchWrites: '写入后列表', patchHandover: '显式 models 会接管整个目录：未列出的模型将不可选。', patchUnlisted: '来源未收录（保留但来源列表中没有）', patchUnderstated: '声明的上下文小于来源可用值',
+        patchApplied: '已补充模型', patchRevision: '配置修订',
+        reasonSettingsUnavailable: '模型设置服务不可用。', reasonSettingsReadOnly: '模型设置为只读，无法写入补丁。', reasonRouteMissing: '尚未声明 openai-codex 路由；请先在模型页用「从目录添加」声明它。', reasonSignIn: '请先登录 ChatGPT。', reasonExpired: '凭据已过期，请重新登录或等待刷新后重试。', reasonIncomplete: '凭据缺少 account ID，请重新登录。', reasonSource: '无法获取 Codex 模型列表（网络或接口不可用），未写入任何模型。', reasonConfig: '现有模型配置无法安全合并，未做改动。', reasonConflict: '模型来源或配置已变化，请重新预览后再确认。', reasonRegistration: '配置已写入，但模型未能注册；请检查宿主设置。',
       },
       en: {
         login: 'Sign in to ChatGPT', relogin: 'Sign in again', disconnected: 'No ChatGPT account connected', connected: 'Connected', expired: 'Credential awaiting refresh', incomplete: 'Incomplete credential', pending: 'Waiting for authorization…',
@@ -121,6 +149,9 @@ window.__ModuleLoader__.load({
         incompleteHint: 'The stored credential is missing required fields. Sign in again.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
         patchPreview: 'Check missing models', patchApply: 'Confirm missing model patch', patchEmpty: 'No missing models to add', patchError: 'Cannot safely retrieve or apply Codex models. Try again later.', patchCount: 'Models to add', patchPreserved: 'Preserved models', patchUnverified: 'Unverified', patchFallback: 'Remote catalog unavailable; installed models only. No patch applied.', patchLimited: 'Unsupported reasoning efforts', patchTotal: 'Remote entries', patchDetails: 'Model and source details', logoutShort: 'Sign out', plan: 'Plan',
+        patchSelected: 'Currently selectable', patchSourceAt: 'Listing fetched', patchClient: 'Requested as', patchWrites: 'Catalogue after writing', patchHandover: 'An explicit models list replaces the whole catalogue: models not listed here become unselectable.', patchUnlisted: 'Not in the source listing (kept anyway)', patchUnderstated: 'Declared context below the available source value',
+        patchApplied: 'Models added', patchRevision: 'Config revision',
+        reasonSettingsUnavailable: 'The model settings service is unavailable.', reasonSettingsReadOnly: 'Model settings are read-only, so no patch can be written.', reasonRouteMissing: 'The openai-codex route is not declared yet; add it from the catalog on the Models page first.', reasonSignIn: 'Sign in to ChatGPT first.', reasonExpired: 'The credential expired. Sign in again, or retry after it refreshes.', reasonIncomplete: 'The credential has no account ID. Sign in again.', reasonSource: 'The Codex model listing could not be retrieved (network or endpoint). No model was added.', reasonConfig: 'The existing model configuration cannot be safely merged; nothing was changed.', reasonConflict: 'The model source or configuration changed. Preview again before confirming.', reasonRegistration: 'The configuration was saved, but the models did not register. Check the host settings.',
       },
     }
 
@@ -254,27 +285,63 @@ window.__ModuleLoader__.load({
      * must answer for the one route it signs into. Rendering unconditionally
      * would put a ChatGPT sign-in card on llama-cpp and command-code too.
      */
+    /** Locale key for one refusal reason; every code has its own remedy. */
+    const REASON_KEYS: Record<PatchReason, string> = {
+      'settings-unavailable': 'reasonSettingsUnavailable',
+      'settings-read-only': 'reasonSettingsReadOnly',
+      'route-missing': 'reasonRouteMissing',
+      'sign-in-required': 'reasonSignIn',
+      'credential-expired': 'reasonExpired',
+      'credential-incomplete': 'reasonIncomplete',
+      'source-unavailable': 'reasonSource',
+      'config-unmergeable': 'reasonConfig',
+      'conflict': 'reasonConflict',
+      'registration-unconfirmed': 'reasonRegistration',
+    }
+    const reasonKey = (reason: PatchReason) => REASON_KEYS[reason] ?? REASON_KEYS['source-unavailable']
+
     function CodexCard({ provider, t }: CardProps) {
       const connection = (globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {})[CODEX_ROUTE]
       const controller = React.useRef<ReturnType<typeof createController> | undefined>(undefined)
       const [state, setState] = useState<Snapshot>({ loading: true, busy: false, status: undefined, error: false })
       const [patch, setPatch] = useState<PatchPreview | undefined>(undefined)
+      const [applied, setApplied] = useState<PatchApplied | undefined>(undefined)
       const [patchBusy, setPatchBusy] = useState(false)
-      const [patchError, setPatchError] = useState(false)
+      const [patchReason, setPatchReason] = useState<PatchReason | undefined>(undefined)
+
+      /**
+       * One preview or apply request.
+       *
+       * A refusal carries the reason the endpoint decided, so the card names
+       * the remedy (`route-missing`, `settings-read-only`, …) instead of
+       * reporting every failure as an unreachable source. An HTTP-level
+       * refusal without a body falls back to the generic reason.
+       */
       const inspectPatch = async (apply = false) => {
         if (!connection || patchBusy) return
-        setPatchBusy(true); setPatchError(false)
+        setPatchBusy(true); setPatchReason(undefined)
         try {
           const response = await fetch(`${connection.path}/${apply ? 'models-apply' : 'models-preview'}`, {
             method: apply ? 'POST' : 'GET',
             headers: { 'x-dsh-chatgpt-token': connection.token, ...(apply && patch ? { 'x-dsh-model-patch': patch.signature } : {}) },
             credentials: 'same-origin', redirect: 'error', cache: 'no-store',
           })
-          if (!response.ok) throw new Error('Model patch unavailable')
-          if (apply) { setPatch(undefined); return }
-          const value = await response.json() as PatchPreview
-          setPatch(value)
-        } catch { setPatch(undefined); setPatchError(true) }
+          const value = await response.json().catch(() => undefined) as (PatchApplied & { reason?: PatchReason }) | undefined
+          // A refusal is not a preview: its body carries a reason, not a diff.
+          if (!response.ok) {
+            setPatch(undefined)
+            setPatchReason(value?.reason ?? 'source-unavailable')
+            return
+          }
+          if (apply) {
+            setPatch(undefined)
+            // A write without an `applied` list confirms nothing.
+            if (Array.isArray(value?.applied)) setApplied(value)
+            else setPatchReason('registration-unconfirmed')
+            return
+          }
+          if (value) setPatch(value)
+        } catch { setPatch(undefined); setPatchReason('source-unavailable') }
         finally { setPatchBusy(false) }
       }
       useEffect(() => {
@@ -333,13 +400,30 @@ window.__ModuleLoader__.load({
         patch && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
           h('p', { className: 'dsh-chatgpt-preview-title' }, patch.unavailable ? t('patchFallback') : patch.added.length ? `${t('patchCount')} (${patch.added.length})` : t('patchEmpty')),
           !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-models' }, ...patch.added.map(id => h('span', { key: id, className: 'dsh-chatgpt-model' }, id))),
-          h('p', { className: 'dsh-chatgpt-note' }, `${t('patchPreserved')}: ${patch.preserved.length} · ${t('patchTotal')}: ${patch.total} · ${t('patchUnverified')}: ${patch.unsupported}`),
+          h('p', { className: 'dsh-chatgpt-note' }, `${t('patchSelected')}: ${patch.current ?? patch.preserved.length} · ${t('patchPreserved')}: ${patch.preserved.length} · ${t('patchTotal')}: ${patch.total} · ${t('patchUnverified')}: ${patch.unsupported}`),
           h('details', { className: 'dsh-chatgpt-details' }, h('summary', null, t('patchDetails')),
             h('p', { className: 'dsh-chatgpt-note' }, patch.preserved.join(', ')),
             h('p', { className: 'dsh-chatgpt-note' }, `${t('patchLimited')}: ${patch.limited?.map(item => `${item.id} (${item.omittedEfforts.join(', ')})`).join('; ') || '0'}`),
-            h('p', { className: 'dsh-chatgpt-note' }, patch.source)),
+            h('p', { className: 'dsh-chatgpt-note' }, patch.source),
+            patch.fetchedAt !== undefined && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchSourceAt')} ${new Date(patch.fetchedAt).toLocaleString()}${patch.clientVersion ? ` · ${t('patchClient')} ${patch.clientVersion}` : ''}`),
+            // The catalogue the write would leave behind, not just the additions.
+            !patch.unavailable && patch.added.length > 0 && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchWrites')}: ${[...patch.preserved, ...patch.added].join(', ')}`),
+            // Kept models the listing does not carry: reported, never removed.
+            patch.unlisted?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchUnlisted')}: ${patch.unlisted.join(', ')}`) : null,
+            // A declared capacity below what the source now allows is reported,
+            // never rewritten: the value may be the user's own choice.
+            patch.understated?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchUnderstated')}: ${patch.understated.map(item => `${item.id} (${item.declared} → ${item.source})`).join('; ')}`) : null,
+            patch.replacesCatalog && h('p', { className: 'dsh-chatgpt-note' }, t('patchHandover'))),
           !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-actions' }, button(t('patchApply'), 'primary', () => void inspectPatch(true)))),
-        patchError && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('patchError')))
+
+        applied?.applied && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
+          h('p', { className: 'dsh-chatgpt-preview-title' }, `${t('patchApplied')} (${applied.applied.length})`),
+          h('div', { className: 'dsh-chatgpt-models' }, ...applied.applied.map(id => h('span', { key: id, className: 'dsh-chatgpt-model' }, id))),
+          h('p', { className: 'dsh-chatgpt-note' }, `${t('patchPreserved')}: ${applied.preserved.length} · ${t('patchRevision')}: ${applied.before?.revision ?? '-'} → ${applied.after?.revision ?? '-'}`),
+          h('details', { className: 'dsh-chatgpt-details' }, h('summary', null, t('patchDetails')),
+            h('p', { className: 'dsh-chatgpt-note' }, `${t('patchWrites')}: ${(applied.after?.models ?? []).join(', ')}`),
+            h('p', { className: 'dsh-chatgpt-note' }, applied.source))),
+        patchReason && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, `${t('patchError')} ${t(reasonKey(patchReason))}`))
     }
 
     function apply(ctx: ClientContext) {

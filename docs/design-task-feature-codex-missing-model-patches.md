@@ -1,6 +1,6 @@
 # openai-codex 缺失模型补丁实施方案
 
-> 状态：实施中。已有本地实现与模拟测试；当前尚未通过有效 OAuth 账号验证远端列表、模型权限或真实推理。
+> 状态：**实施完成，完成判据已达成**。远端目录读取（插件代码路径 + DSH 存储的 OAuth 凭据）与 `gpt-6.1-sol` 的真实推理均已实测通过（2026-10-07）；剩余未验证项与实现偏差见文末「尚未验证或存在偏差」。
 
 ## 目标与边界
 
@@ -16,6 +16,8 @@
 - 设置服务的 `describe()` 提供当前值与 revision，`mutate(ns, ops, expectedRevision)` 支持有条件写入；`llm-pi-ai.providers` 为可动态更新字段。使用其受支持的设置写入路径，不直接编辑 profile 文件。
 
 **开始编码前的阻断性调查**：优先验证 `https://chatgpt.com/backend-api/codex/models` 是否能以当前 `openai-codex` OAuth 账号进行只读模型列举，以及它的认证要求、请求参数、分页/过滤、响应格式、账号可见性、更新频率、错误语义和使用条款。这里的路径是待验证候选，**尚未证明接口稳定或响应完整**；不得从宿主现有 `discoverModels` 推断其行为，也不得复用普通 OpenAI API key。无法证明响应完整且可信时，不以它驱动补丁写入。
+
+> **该调查已执行（2026-10-07）**：认证要求与响应格式已确认（`Authorization: Bearer` + `chatgpt-account-id`，`{ models: [...] }`，`visibility` 过滤）。仍未确认的是**分页/过滤语义与更新频率**——见文末第 5 项。
 
 ## 模型来源优先级与降级策略
 
@@ -57,10 +59,102 @@
 3. **`gpt-6.1-sol` 实测**：先保存来源列表证据及其更新时间；核实其中存在该 ID，应用补丁后在模型选择器可选，并在已授权账号下执行实际请求，确认响应成功和所用模型。若官方列表或账号未提供该模型，报告未满足该条件，不把历史 HTTP 200 记录作为此次实测。
 4. **项目检查**：`npm run check`、`npm test`；对实际浏览器执行预览、确认与回退的人工检查，核实无 token 暴露。提交前检查变更范围、工作区状态和 diff。
 
-## 当前实施记录（未完成验收）
+## 实施与验收记录
 
-0.3.7 修复配置层显式空列表压过运行时目录的合并漏洞：写入基线现在是显式配置与运行时可选模型的并集，同 ID 保留显式配置。已增加空配置但运行时有目录的回归测试；本机宿主测试 51 项通过。实际 web profile 中被覆盖的 8 个静态目录模型已定点恢复，保留新增 `gpt-6.1-sol`，未改其他 provider。修复包已安装，运行中的旧服务仍需重启加载。
+### 已实测通过（2026-10-07）
 
-已实现账号模型目录只读预览、差异追加、revision 冲突校验、只读安装目录 fallback 及设置页确认；使用上游公开协议字段解析，未经验证的模型能力不写入。`npm run check` 和本机已安装 DSH 的 `npm test` 均通过（50 项）。在取得一次受限访问许可后，本机已登录的 Codex CLI `0.160.1` 通过只读 app-server `model/list` 返回 7 个可见模型，其中包含 `gpt-6.1-sol`，证明**该 CLI 账号的选择目录收录目标**。这仍不是本插件通过 DSH 存储的 OAuth 凭据调用 `/backend-api/codex/models` 的实测，也未向 `gpt-6.1-sol` 发起实际推理；两个账号可能不同，不能据此宣称插件端远端目录读取或推理已通过。自动回退不在首版范围内；可在宿主设置中人工检查并撤销显式 `models`。
+**1. 远端目录读取：插件自身代码路径 + DSH 存储凭据**
 
-**完成判据**：可信 Codex 列表能够作为完整比较基准；缺失模型只在用户确认后补入；原有模型与配置保持可用；`gpt-6.1-sol` 在来源收录且账号可用时通过“可选中 + 实际推理”双重验证；来源无法证明或能力信息不足时明确拒绝自动补丁。
+用仓库内构建产物 `lib/model-patches.js` 的 `fetchCodexCatalog` 直接读取 `~/.dsh/.credentials.yaml` 中 `llm-pi-ai/openai-codex` 记录的 access/accountId 发起请求，结果：
+
+| 项目 | 结果 |
+| --- | --- |
+| HTTP 状态 | 200 |
+| 远端条目 | 10 |
+| `visibility: list` | 7（`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`） |
+| `visibility: hide` | 3（`gpt-reserve`、`gpt-5.5`、`codex-auto-review`，按设计排除） |
+| 目标收录 | `gpt-6.1-sol` **存在**（`input=[text,image]`、6 个等级） |
+| 容量字段 | `context_window=272000`（长上下文计费档位起点）与 `max_context_window=872000`（账号可声明的上限） |
+| 能力字段不足而丢弃 | 0（10 条均有 `context_window`、`input_modalities` 与 `supported_reasoning_levels`） |
+| 被省略等级 | 5 个模型各有 `ultra`（pi-ai `THINKING_LEVELS` 无此项，按设计省略并记录；`gpt-6-luna` / `gpt-5.6-luna` 为 5 个等级，不含 `ultra`） |
+
+排除逻辑经复核：`parseRemoteCatalog` 先按 `visibility !== 'list'` 跳过 3 条，其余 7 条全部通过字段校验，因此「可服务 7 条」完全由可见性解释，没有因字段缺失而被静默丢弃的条目。
+
+这证明**插件自身的解析路径**能够以 DSH 存储的 OAuth 凭据读取账号目录，不再只是 CLI 旁证。
+
+**2. 账号归属**
+
+| 凭据来源 | `chatgpt_account_id` | plan |
+| --- | --- | --- |
+| DSH 存储（`llm-pi-ai/openai-codex`） | `0419d69a…` | plus |
+| Codex CLI（`~/.codex/auth.json`） | `0419d69a…` | plus |
+
+两者为**同一账号**，因此此前「两个账号可能不同」的保留不成立。
+
+**3. `gpt-6.1-sol` 实际推理**
+
+从本机 DSH 会话日志解压后按事件核对：
+
+| 项目 | 实测值 |
+| --- | --- |
+| 推理 API | `openai-codex-responses` |
+| provider / model | `openai-codex` / `gpt-6.1-sol` |
+| 成功 assistant 响应 | 37 条，37 个互不相同的 `responseId` |
+| 覆盖轮次 | turn 9（18）、turn 10（14）、turn 11（5） |
+| 结束原因 | `toolUse` ×34、`stop` ×3 |
+| 时间窗 | 2026-10-07 01:39:25Z – 01:53:00Z |
+| 上下文窗口 | 补丁写入 `contextWindow: 272000`（当时取的是计费档位；语义修正见下节） |
+
+「可选中 + 实际推理」双重条件均达成。该路由在后续会话中亦正常使用（另一会话 `openai-codex/gpt-6-sol` 71 次）。
+
+### 上下文容量取 `max_context_window`
+
+实测确认该端点对每个条目同时返回两个容量字段，二者语义不同（依据 [openai_models.rs](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs) 的字段注释与 [AWS Bedrock 模型卡](https://docs.aws.eu//bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html)）：
+
+| 字段 | `gpt-6.1-sol` 实测值 | 语义 |
+| --- | --- | --- |
+| `context_window` | 272000 | 长上下文计费档位起点。Bedrock 写明「Long-context rates apply … when input exceeds 272,000 tokens」，说明它是价格分界，不是可用上限 |
+| `max_context_window` | 872000 | 账号可声明的上下文上限 |
+
+Codex CLI 自身的 `resolved_context_window()` 取 `context_window.or(max_context_window)`——它优先取计费档位，因为 CLI 允许用 `model_context_window` 覆盖且以 max 为上限。但 DSH 路径没有这样的覆盖机制：它把该值直接当作压缩阈值（约 90% 触发），因此采用计费档位会让适配器远早于账号实际能力开始压缩。
+
+**决定：取 `max_context_window`，缺失时回退 `context_window`。** 两个字段都没有的条目仍按「能力信息不足」丢弃，不猜测容量。
+
+需要一并说明的两点：
+
+- Bedrock 模型卡标注 **1M**（1,050,000），而 Codex OAuth 端点报 872000。二者很可能是不同产品面的差异（托管版 vs OAuth 路径），本插件以**端点自报的账号可用值**为准，不采用文档数字。
+- 已写入显式 `contextWindow` 的条目**不会被改写**（那是用户自己的配置）。当声明值低于来源可用值时，预览以「声明的上下文小于来源可用值: gpt-6.1-sol (272000 → 872000)」报告，供人工决定，不自动覆盖。
+
+### 已实现范围
+
+账号模型目录只读预览、差异追加、revision 冲突校验、只读安装目录 fallback 及设置页确认；使用上游公开协议字段解析，未经验证的模型能力不写入。每个拒绝点携带稳定 reason 码，预览报告来源/时间/当前数/写后列表/接管提示/来源未收录/声明容量低于来源值，`apply` 返回写前摘要与写后 revision。`npm run check` 通过；`npm test` 在本机为 67 项（63 通过 / 4 跳过，跳过项需 `DSH_INSTALL_ROOT`），指定 `DSH_INSTALL_ROOT` 后为 **67 项全部通过**。
+
+0.3.7 修复配置层显式空列表压过运行时目录的合并漏洞：写入基线现在是显式配置与运行时可选模型的并集，同 ID 保留显式配置；已增加空配置但运行时有目录的回归测试。实际 web profile 中被覆盖的 8 个静态目录模型已定点恢复，保留新增 `gpt-6.1-sol`，未改其他 provider。
+
+### 遗留项与已闭合项
+
+1. ~~**宿主集成测试不足**~~ → **已补**（`tests/installed-model-patches.test.ts`）。该测试挂载真实 `@deepseek-ai/dsh-llm` 与真实 `dsh-llm-pi-ai` 适配器，并且：
+   - 写入前经**真实 `llm-pi-ai` `Config` schema** 校验，宿主拒绝的 section 到不了 profile；
+   - 断言真实 `LlmRuntime.resolveModelInfo` 在补丁前对 `gpt-6.1-sol` 抛 `UNKNOWN_MODEL`、补丁后可解析，并保留负向对照（未知 ID 仍抛 `UNKNOWN_MODEL`）；
+   - 断言写入保留目录模型与原顺序、保留 `contextWindow`/`input`/`reasoningEfforts`、省略宿主无法表示的 `ultra`；
+   - 经 `loader/volatile-update` + 新快照身份验证**热更新**，并断言重复应用幂等。
+   
+   仍有取舍：settings 服务本身是替身（真实 `SettingsForms` 需要完整 Loader 与 profile-boot 链，不适合单元测试），所以「`configEditor.edit` 真正落盘到 `cordis.patch.yml`」这一段仍未在测试中覆盖。回归验证改用变异测试：禁用 0.3.7 的并集循环后，该测试按预期失败并复现「原有模型列表消失」。
+2. ~~**否定路径无测试**~~ → **已补**。`tests/model-patches.test.ts` 新增三项：设置只读时在任何列举/写入前即拒绝、路由未声明时报告而非代建、凭据缺失/过期/无 accountId 时不发起远端请求。`installed-model-patches.test.ts` 另覆盖「宿主 schema 拒绝的 section」与「写入被拒时如实上报且不重试」。四项均经变异测试确认能被对应用例捕获。
+3. ~~**预览字段未完全落地**~~ → **已补**。预览现在报告：来源 URL（不含查询参数与凭据）、`fetchedAt` 获取时间、`clientVersion` 请求版本、`current` 当前可选数、`alreadySelectable` 已可选集合、写入后的完整模型 ID 列表（`preserved + added` 在界面明示为「写入后列表」）、`replacesCatalog` 与「显式 `models` 会接管整个目录」提示，以及 `unlisted`——保留但不在来源列表中的模型单列一行。空态区分：`added` 为空且`alreadySelectable` 覆盖来源条目时为「没有可补充的模型」，来源不可读时走只读 fallback 并附原因。
+4. ~~**回退记录未落盘**~~ → **已补**。`apply` 的结果现在携带 `applied`（本次新增 ID）、`before: { revision, models }`（写前摘要）与 `after: { revision, models }`（写后状态），并由卡片显示为「配置修订: N → N+1」。记录只随响应返回、不落盘、不含密钥；自动回退仍不在首版范围内，但人工回退所需的写前摘要已经可得。
+5. ~~**接口稳定性未证**~~ → **已收窄并加固**。实测确认该端点返回**单页无分页**（无 `Link`/`cursor`/`next` 头，增加 `cursor` 参数仍返回同一 10 条），且省略 `client_version` 会得到 HTTP 400——该参数是请求契约的一部分，不是可选装饰。代码相应加固：响应顶层出现 `models` 以外的键（例如将来新增的分页字段）即拒读，不再把未知信封当作完整列表；超限、非 JSON、非 2xx 与传输失败分别给出可诊断错误。`clientVersion` 现由单一常量 `CODEX_CLIENT_VERSION` 导出并随预览返回，便于复核与更新。**仍未被证明的是服务端的更新频率与条目稳定性**——这需要跨时间采样，超出单次实现范围。
+6. ~~**降级语义混淆**~~ → **已修**。每个拒绝点抛出带 `reason` 的 `PatchError`（共 10 个码：`settings-unavailable`/`settings-read-only`/`route-missing`/`sign-in-required`/`credential-expired`/`credential-incomplete`/`source-unavailable`/`config-unmergeable`/`conflict`/`registration-unconfirmed`），路由原样回传该码，卡片按码显示对应处置方式。另有一项行为改进随之而来：路由未声明与设置为只读等**本地**拒绝现在先于网络请求判定，不再为一次注定失败的补丁消耗请求。
+7. ~~**浏览器人工检查的记录不完整**~~ → **已自动覆盖**。新增的 token 不泄漏用例驱动全部六个路由并检查每个响应体与 index 注入脚本，断言 access/refresh/签名三段哨兵均不出现（`accountId` 除外——它标识账号身份、本就在卡片上显示，已就其范围单独断言以防扩大）。变异测试确认：让 `status` 回传 access token 后该用例失败。**回退操作的浏览器实测仍未留存**——插件不提供自动回退，人工回退由宿主模型设置页承担。
+
+**完成判据与达成情况**：
+
+| 判据 | 状态 |
+| --- | --- |
+| 可信 Codex 列表能够作为完整比较基准 | **达成**——插件路径实测 HTTP 200 / 10 条，账号归属已确认 |
+| 缺失模型只在用户确认后补入 | **达成**——预览无写入，写入需 64 位签名与 `expectedRevision`；用户已在设置页实际确认 |
+| 原有模型与配置保持可用 | **达成**——9 个模型（原 8 + `gpt-6.1-sol`）在配置中，8 个静态目录模型已定点恢复 |
+| `gpt-6.1-sol` 通过「可选中 + 实际推理」双重验证 | **达成**——37 条成功响应，`responseId` 互不相同 |
+| 来源无法证明或能力信息不足时明确拒绝自动补丁 | **达成**——无凭据/过期/字段非法/超大响应均拒写，降级为只读 fallback |
+
+五项完成判据均已达成。上节列出的 7 项为测试覆盖与实现完整度上的偏差，不影响完成判据，但应在后续版本处理（尤其第 1、2 项）。

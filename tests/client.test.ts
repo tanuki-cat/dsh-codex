@@ -152,7 +152,7 @@ function controls(tree) {
 }
 
 /** Answers the management API the way the host route does. */
-function host({ status, fail = [], preview } = {}) {
+function host({ status, fail = [], preview, apply, refusal } = {}) {
   const calls = []
   return {
     calls,
@@ -161,7 +161,13 @@ function host({ status, fail = [], preview } = {}) {
       calls.push(operation)
       if (fail.includes(operation)) throw new Error('offline')
       assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
-      return { ok: true, async json() { return operation === 'status' ? status : operation === 'models-preview' ? preview : {} } }
+      // A refusal carries a reason code with a non-2xx status, which is what
+      // lets the card name the remedy rather than the source.
+      const body = operation === 'models-apply' ? apply : operation === 'models-preview' ? preview : status
+      if (refusal && operation.startsWith('models-')) {
+        return { ok: false, status: refusal.status, async json() { return { error: 'refused', reason: refusal.reason } } }
+      }
+      return { ok: true, async json() { return operation === 'status' ? status : body ?? {} } }
     },
   }
 }
@@ -513,4 +519,76 @@ test('model patch requires preview before a separate confirmation', async () => 
   elements(page.tree).find(el => el.type === 'button' && text(el) === '确认补充缺失模型').props.onClick()
   await settled()
   assert.deepEqual(api.calls, ['status', 'models-preview', 'models-apply'])
+})
+
+test('the preview names the source, its age and the catalogue the write would leave', async () => {
+  const fetchedAt = Date.UTC(2026, 9, 7, 1, 39)
+  const api = host({ status: { ...connected, patchAvailable: true }, preview: {
+    added: ['gpt-6.1-sol'], preserved: ['gpt-6-sol'], total: 10, unsupported: 0, current: 1,
+    alreadySelectable: ['gpt-6-sol'], unlisted: ['legacy-model'], understated: [{ id: 'gpt-6-sol', declared: 272000, source: 872000 }],
+    replacesCatalog: true, clientVersion: '0.160.1', fetchedAt,
+    source: 'https://chatgpt.com/backend-api/codex/models', signature: 'a'.repeat(64),
+  } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+  await settled()
+  const notes = elements(page.tree).filter(el => el.props.className === 'dsh-chatgpt-note').map(text)
+  // The counts line distinguishes what is already selectable from what is kept.
+  assert.ok(notes.some(line => line.includes('当前可选: 1') && line.includes('保留模型: 1')), JSON.stringify(notes))
+  // The details read back the source, when it was fetched, and the version asked for.
+  assert.ok(notes.some(line => line === 'https://chatgpt.com/backend-api/codex/models'))
+  assert.ok(notes.some(line => line.includes('列表获取于') && line.includes('请求版本 0.160.1')), JSON.stringify(notes))
+  // The catalogue after writing, and the takeover warning, are both stated.
+  assert.ok(notes.some(line => line.includes('写入后列表: gpt-6-sol, gpt-6.1-sol')), JSON.stringify(notes))
+  assert.ok(notes.some(line => line.includes('接管整个目录')), JSON.stringify(notes))
+  // A kept model the listing omits is named rather than silently dropped.
+  assert.ok(notes.some(line => line.includes('来源未收录') && line.includes('legacy-model')), JSON.stringify(notes))
+  // A declared capacity below the source maximum is shown as a pair, so the
+  // gap is visible without the patch rewriting the user's own value.
+  assert.ok(notes.some(line => line.includes('声明的上下文小于来源可用值') && line.includes('gpt-6-sol (272000 → 872000)')), JSON.stringify(notes))
+})
+
+test('an applied patch reports what it added and the revisions it moved between', async () => {
+  const api = host({
+    status: { ...connected, patchAvailable: true },
+    preview: { added: ['gpt-6.1-sol'], preserved: ['gpt-6-sol'], total: 10, unsupported: 0, signature: 'a'.repeat(64), source: 'src' },
+    apply: {
+      applied: ['gpt-6.1-sol'], added: [], preserved: ['gpt-6-sol'], total: 10, unsupported: 0,
+      before: { revision: 3, models: ['gpt-6-sol'] }, after: { revision: 4, models: ['gpt-6-sol', 'gpt-6.1-sol'] },
+      source: 'https://chatgpt.com/backend-api/codex/models', signature: '',
+    },
+  })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+  await settled()
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '确认补充缺失模型').props.onClick()
+  await settled()
+  const notes = elements(page.tree).filter(el => el.props.className === 'dsh-chatgpt-note').map(text)
+  const titles = elements(page.tree).filter(el => el.props.className === 'dsh-chatgpt-preview-title').map(text)
+  assert.ok(titles.some(line => line.startsWith('已补充模型')), JSON.stringify(titles))
+  // The record a later review needs: the new IDs and the revision pair.
+  assert.ok(notes.some(line => line.includes('配置修订: 3 → 4')), JSON.stringify(notes))
+  assert.ok(notes.some(line => line.includes('写入后列表: gpt-6-sol, gpt-6.1-sol')), JSON.stringify(notes))
+  // The preview is replaced, so the confirmation button is gone.
+  assert.ok(!controls(page.tree).includes('确认补充缺失模型'))
+})
+
+test('each refusal reason renders its own remedy instead of a generic failure', async () => {
+  const cases = [
+    ['route-missing', '尚未声明 openai-codex 路由'],
+    ['settings-read-only', '只读，无法写入补丁'],
+    ['source-unavailable', '无法获取 Codex 模型列表'],
+    ['conflict', '请重新预览后再确认'],
+  ]
+  for (const [reason, expected] of cases) {
+    const api = host({ status: { ...connected, patchAvailable: true }, refusal: { reason, status: 409 } })
+    const page = browser({ environment: api }).mount()
+    await settled()
+    elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+    await settled()
+    const alerts = elements(page.tree).filter(el => el.props.role === 'alert').map(text)
+    assert.ok(alerts.some(line => line.includes(expected)), reason + ' -> ' + JSON.stringify(alerts))
+  }
 })
