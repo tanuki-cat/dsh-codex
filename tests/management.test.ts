@@ -53,15 +53,16 @@ test('management routes require the injected capability and POST for state chang
     on(_event, callback) { inject = callback },
     effect(callback) { cleanup = callback() },
   }
-  registerCodexManagement(web, manager)
+  const patch = { async preview() { return { added: ['gpt-6.1-sol'], signature: 'a'.repeat(64) } }, async apply(signature) { assert.equal(signature, 'a'.repeat(64)); return { applied: ['gpt-6.1-sol'] } } }
+  registerCodexManagement(web, manager, () => patch)
   const table = []
   inject(table)
   assert.equal(table[0].kind, 'script')
   assert.equal(table[0].placement, 'head')
   const token = /"token":"([a-f0-9]+)"/.exec(table[0].text)[1]
-  async function request(operation, method, capability = token) {
+  async function request(operation, method, capability = token, signature) {
     let code, body
-    await route.handler({ url: route.path + operation, method, headers: { host: '127.0.0.1:8080', 'x-dsh-chatgpt-token': capability } }, {
+    await route.handler({ url: route.path + operation, method, headers: { host: '127.0.0.1:8080', 'x-dsh-chatgpt-token': capability, 'x-dsh-model-patch': signature } }, {
       setHeader() {}, writeHead(value) { code = value }, end(value) { body = JSON.parse(value) },
     })
     return { code, body }
@@ -71,5 +72,9 @@ test('management routes require the injected capability and POST for state chang
   assert.equal((await request('/status', 'GET')).body.available, true)
   assert.equal((await request('/login', 'POST')).body.state, 'pending')
   assert.equal((await request('/cancel', 'POST')).body.state, 'idle')
+  assert.equal((await request('/models-preview', 'GET', 'wrong')).code, 403)
+  assert.deepEqual((await request('/models-preview', 'GET')).body.added, ['gpt-6.1-sol'])
+  assert.equal((await request('/models-apply', 'POST')).code, 400)
+  assert.deepEqual((await request('/models-apply', 'POST', token, 'a'.repeat(64))).body.applied, ['gpt-6.1-sol'])
   await cleanup()
 })

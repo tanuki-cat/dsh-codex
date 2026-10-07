@@ -31,6 +31,10 @@ function context({ flow = true } = {}) {
       },
     },
     inject(dependencies, callback) {
+      if (dependencies[0] === 'settings') {
+        assert.deepEqual(dependencies, ['settings', 'llm'])
+        return
+      }
       assert.deepEqual(dependencies, ['webServer', 'webRuntime'])
       callback(ctx)
     },

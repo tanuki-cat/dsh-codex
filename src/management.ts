@@ -11,6 +11,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
 import type { IncomingMessage } from 'node:http'
 import type { CodexContext, ManagementState, WebContext } from './types.js'
+import type { createModelPatches } from './model-patches.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
@@ -143,18 +144,19 @@ export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, 
  * @param manager - the codex management state machine.
  * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.
  */
-export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typeof createCodexManagement>) {
+export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typeof createCodexManagement>, patches?: () => ReturnType<typeof createModelPatches> | undefined) {
   const token = randomBytes(32).toString('hex')
   const path = `/chatgpt-management/${CODEX_PROVIDER}`
   ctx.on('webserver/index-inject', table => {
     // A computed index script merges instances without exposing OAuth credentials.
     table.push({ kind: 'script', placement: 'head', text: `globalThis.${MANAGEMENT_GLOBAL}=Object.assign(globalThis.${MANAGEMENT_GLOBAL}||{},${JSON.stringify({ [CODEX_PROVIDER]: { path, token } })});` })
   })
+  const withPatch = async (operation: () => Promise<object>) => ({ ...await operation(), patchAvailable: patches?.() !== undefined })
   const routes: Record<string, { method: string; run: () => Promise<unknown> }> = {
-    '/status': { method: 'GET', run: () => manager.status() },
-    '/login': { method: 'POST', run: () => manager.start() },
-    '/cancel': { method: 'POST', run: () => manager.cancel() },
-    '/logout': { method: 'POST', run: () => manager.signOut() },
+    '/status': { method: 'GET', run: () => withPatch(() => manager.status()) },
+    '/login': { method: 'POST', run: () => withPatch(() => manager.start()) },
+    '/cancel': { method: 'POST', run: () => withPatch(() => manager.cancel()) },
+    '/logout': { method: 'POST', run: () => withPatch(() => manager.signOut()) },
   }
   const dispose = ctx.webServer.register({ kind: 'prefix', path, async handler(req, res) {
     res.setHeader('cache-control', 'no-store')
@@ -163,6 +165,24 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
     if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
     const operation = new URL(req.url ?? '/', 'http://127.0.0.1').pathname.slice(path.length)
     const route = routes[operation]
+    if (operation === '/models-preview' && req.method === 'GET') {
+      try { reply(200, await patches?.()?.preview() ?? { unavailable: 'Model settings are unavailable.' }) }
+      catch {
+        try { reply(200, await patches?.()?.fallback() ?? { unavailable: 'Model settings are unavailable.' }) }
+        catch { reply(503, { error: 'Codex model listing and installed catalog are unavailable.' }) }
+      }
+      return
+    }
+    if (operation === '/models-apply' && req.method === 'POST') {
+      try {
+        const signature = req.headers['x-dsh-model-patch']
+        if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) { reply(400, { error: 'Invalid confirmation.' }); return }
+        const patch = patches?.()
+        if (!patch) { reply(503, { error: 'Model settings are unavailable.' }); return }
+        reply(200, await patch.apply(signature))
+      } catch { reply(409, { error: 'Model source or configuration changed; preview again before applying.' }) }
+      return
+    }
     if (route === undefined || route.method !== req.method) { reply(405, { error: 'Unsupported management operation.' }); return }
     try {
       reply(200, await route.run())

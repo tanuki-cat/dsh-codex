@@ -152,7 +152,7 @@ function controls(tree) {
 }
 
 /** Answers the management API the way the host route does. */
-function host({ status, fail = [] } = {}) {
+function host({ status, fail = [], preview } = {}) {
   const calls = []
   return {
     calls,
@@ -161,7 +161,7 @@ function host({ status, fail = [] } = {}) {
       calls.push(operation)
       if (fail.includes(operation)) throw new Error('offline')
       assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
-      return { ok: true, async json() { return operation === 'status' ? status : {} } }
+      return { ok: true, async json() { return operation === 'status' ? status : operation === 'models-preview' ? preview : {} } }
     },
   }
 }
@@ -222,8 +222,8 @@ test('a connected account shows its identity and offers sign-out', async () => {
   const rendered = text(page.tree)
   assert.match(rendered, /Test Person/)
   assert.match(rendered, /已连接/)
-  assert.match(rendered, /plan: plus/)
-  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
+  assert.match(rendered, /订阅: plus/)
+  assert.deepEqual(controls(page.tree), ['退出登录'])
 })
 
 test('an expired credential explains on-demand refresh and offers recovery', async () => {
@@ -233,7 +233,7 @@ test('an expired credential explains on-demand refresh and offers recovery', asy
   assert.match(text(page.tree), /凭据待刷新/)
   assert.match(text(page.tree), /下次模型请求会尝试自动刷新/)
   assert.doesNotMatch(text(page.tree), /已连接/)
-  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录并删除本地凭据'])
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录'])
 })
 
 test('an incomplete stored grant offers re-login without claiming a connection', async () => {
@@ -241,7 +241,7 @@ test('an incomplete stored grant offers re-login without claiming a connection',
   const page = browser({ environment: api }).mount()
   await settled()
   assert.match(text(page.tree), /凭据不完整/)
-  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录并删除本地凭据'])
+  assert.deepEqual(controls(page.tree), ['重新登录', '退出登录'])
 })
 
 test('a disconnected account offers sign-in', async () => {
@@ -304,7 +304,7 @@ test('login keeps its popup while polling a delayed notice and refreshes after a
   assert.equal(popup.opener, null)
   assert.equal(closed, 1)
   assert.match(text(page.tree), /After Login/)
-  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
+  assert.deepEqual(controls(page.tree), ['退出登录'])
 })
 
 test('polling recovers after a transient status failure without closing the login popup', async () => {
@@ -343,7 +343,7 @@ test('polling recovers after a transient status failure without closing the logi
   assert.equal(closed, 1)
   assert.equal(timers.length, 2)
   assert.deepEqual(calls, ['status', 'login', 'status', 'status'])
-  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
+  assert.deepEqual(controls(page.tree), ['退出登录'])
   assert.equal(elements(page.tree).some(element => element.props.role === 'alert'), false)
 })
 
@@ -456,7 +456,7 @@ test('a rejected popup navigation keeps the authorization link and polling avail
   assert.equal(elements(page.tree).find(element => element.type === 'a').props.href, url)
   assert.deepEqual(controls(page.tree), ['打开浏览器完成授权', '取消登录'])
   await timer()
-  assert.deepEqual(controls(page.tree), ['退出登录并删除本地凭据'])
+  assert.deepEqual(controls(page.tree), ['退出登录'])
 })
 
 test('a pending sign-in can be cancelled without starting a second login', async () => {
@@ -489,4 +489,28 @@ test('a pending sign-in can be cancelled without starting a second login', async
   assert.deepEqual(calls, ['status', 'login', 'cancel'])
   assert.deepEqual(controls(page.tree), ['登录 ChatGPT'])
   assert.equal(timer, undefined)
+})
+
+test('model patch requires preview before a separate confirmation', async () => {
+  const api = host({ status: { ...connected, patchAvailable: true }, preview: {
+    added: ['gpt-6.1-sol'], preserved: ['gpt-6-sol'], total: 2, unsupported: 0,
+    source: 'https://chatgpt.com/backend-api/codex/models', signature: 'a'.repeat(64),
+  } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  assert.ok(controls(page.tree).includes('检查缺失模型'))
+  const actions = elements(page.tree).find(el => el.props.className === 'dsh-chatgpt-actions')
+  assert.deepEqual(controls(actions), ['检查缺失模型', '退出登录'])
+  const logout = elements(actions).find(el => el.type === 'button' && text(el) === '退出登录')
+  assert.equal(logout.props.title, '退出登录并删除本地凭据')
+  assert.equal(elements(actions).find(el => el.type === 'button' && text(el) === '检查缺失模型').props['data-variant'], 'secondary')
+  assert.ok(!controls(page.tree).includes('确认补充缺失模型'))
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+  await settled()
+  assert.ok(controls(page.tree).includes('确认补充缺失模型'))
+  assert.ok(elements(page.tree).some(el => el.type === 'details'))
+  assert.ok(elements(page.tree).some(el => el.props.className === 'dsh-chatgpt-model' && text(el) === 'gpt-6.1-sol'))
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '确认补充缺失模型').props.onClick()
+  await settled()
+  assert.deepEqual(api.calls, ['status', 'models-preview', 'models-apply'])
 })

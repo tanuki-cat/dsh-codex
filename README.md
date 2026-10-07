@@ -36,7 +36,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.4.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.7.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -49,6 +49,12 @@ dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.4.tgz
 4. 浏览器打开授权页，登录并允许；卡片会自动更新为已连接。
 
 若 `openai-codex` 不在 provider 列表中，用模型页的「添加 → 从目录添加」（`addCatalog`）声明它——pi-ai 适配器只注册 profile 中已声明的路由，未声明的 provider 即使已登录也无法选择。该路由不需要 `apiKeyEnv`，留空才能让存储的 OAuth 凭据完成鉴权。
+
+### 缺失模型补丁（预览后确认）
+
+已登录且宿主提供可写设置时，卡片上的「检查缺失模型」会以当前 OAuth 账号只读查询 Codex 模型目录，将可见、能力信息足够的条目与现有可选模型比较。预览无写入；仅在点击「确认补充缺失模型」后通过宿主设置服务写入。响应不向页面传输 OAuth 令牌；网络或模型来源不可用时**不使用旧 pi-ai catalog 猜测新增模型**，原配置保持不变。
+
+补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。写入后若要撤回，请先在宿主模型设置中检查并编辑显式模型列表；当前版本不提供自动回退。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。当前目录请求使用经本机检查的 Codex CLI `0.160.1` 作为 `client_version`；后续版本需要复核并更新该值。只读的已登录 Codex 账号目录已确认包含 `gpt-6.1-sol`；该模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露其已知等级并在预览中说明。通过 DSH 路由的端到端请求仍须验证。
 
 ## 网络
 
@@ -69,8 +75,8 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 ## 首版限制
 
-- 只负责登录界面，不改变模型行为；图片输入、WebSocket 传输、推理等级等由官方实现决定。
-- 不提供模型列表编辑，也不自动修改默认模型。
+- 不实现模型推理协议；图片输入、WebSocket 传输等仍由官方 pi-ai 实现。
+- 只在预览并确认后补充缺失模型，不提供通用模型编辑，也不自动修改默认模型。
 - 账户信息来自凭据中的 JWT 声明（名称、plan、到期时间），不请求额外接口。
 
 ## 验证范围

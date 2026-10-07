@@ -14,12 +14,14 @@ type ManagementStatus = {
   state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
   available: boolean
   connected: boolean
+  patchAvailable?: boolean
   credentialState?: 'absent' | 'expired' | 'incomplete' | 'unexpired'
   account?: { name?: string; email?: string; plan?: string; expires?: number }
   notice?: { url?: string; message?: string }
 }
 type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; error: boolean }
 type Connection = { path: string; token: string }
+type PatchPreview = { added: string[]; preserved: string[]; total: number; unsupported: number; limited?: { id: string; omittedEfforts: string[] }[]; source: string; signature: string; unavailable?: string }
 type Environment = {
   fetch: typeof fetch
   open(url: string, target: string): Window | null
@@ -52,7 +54,7 @@ window.__ModuleLoader__.load({
     // so the card follows the active light/dark theme; the fallbacks only keep a
     // token-less host readable instead of unstyled.
     const css = `
-.dsh-chatgpt-card{display:flex;flex-direction:column;gap:12px;box-sizing:border-box;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18))}
+.dsh-chatgpt-card{display:flex;flex-direction:column;gap:10px;box-sizing:border-box;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18))}
 .dsh-chatgpt-identity{display:flex;align-items:center;gap:10px;min-width:0}
 .dsh-chatgpt-avatar{display:flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:50%;corner-shape:round;background:var(--dsw-alias-bg-skeleton,rgba(128,128,128,.16))}
 .dsh-chatgpt-dot{box-sizing:border-box;flex:none;width:10px;height:10px;border-radius:50%;corner-shape:round;border:1.5px solid currentColor;background:currentColor}
@@ -68,11 +70,20 @@ window.__ModuleLoader__.load({
 .dsh-chatgpt-tag[data-tone='success']{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 10%,transparent);color:var(--dsw-alias-state-success-primary,#16a34a)}
 .dsh-chatgpt-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dsh-chatgpt-push{display:inline-flex;margin-left:auto}
-.dsh-chatgpt-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;height:36px;padding:0 14px;border:none;border-radius:var(--dsw-radius-md,10px);background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:14px;line-height:22px;cursor:pointer}
+.dsh-chatgpt-preview{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));border-radius:var(--dsw-radius-md,10px)}
+.dsh-chatgpt-preview-title{margin:0;font-size:12px;font-weight:600;line-height:18px}
+.dsh-chatgpt-models{display:flex;flex-wrap:wrap;gap:6px}
+.dsh-chatgpt-model{padding:3px 8px;border-radius:6px;background:var(--dsw-alias-bg-skeleton,rgba(128,128,128,.1));font-size:12px;overflow-wrap:anywhere}
+.dsh-chatgpt-details{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary,rgba(128,128,128,.95))}
+.dsh-chatgpt-details summary{cursor:pointer}
+.dsh-chatgpt-details .dsh-chatgpt-note{margin-top:6px;overflow-wrap:anywhere}
+.dsh-chatgpt-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;height:32px;padding:0 12px;border:none;border-radius:var(--dsw-radius-md,10px);background:transparent;color:var(--dsw-alias-label-primary,inherit);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
 .dsh-chatgpt-button:disabled{cursor:not-allowed;opacity:.4}
 .dsh-chatgpt-button:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary,#3b82f6))}
 .dsh-chatgpt-button[data-variant='primary']{background:var(--dsw-alias-button-primary-fill,#111);color:var(--dsw-alias-label-primary-foreground,#fff)}
 .dsh-chatgpt-button[data-variant='primary']:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,#333)}
+.dsh-chatgpt-button[data-variant='secondary']{border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.18));background:var(--dsw-alias-bg-primary,transparent)}
+.dsh-chatgpt-button[data-variant='secondary']:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(128,128,128,.08))}
 .dsh-chatgpt-button[data-variant='danger']{padding:0 10px;color:var(--dsw-alias-state-error-primary,#d33)}
 .dsh-chatgpt-button[data-variant='danger']:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger,rgba(221,51,51,.08))}
 .dsh-chatgpt-notice{display:flex;align-items:center;gap:8px;margin:0;color:var(--dsw-alias-label-secondary,rgba(128,128,128,.95));font-size:12px;line-height:18px}
@@ -100,6 +111,7 @@ window.__ModuleLoader__.load({
         expiredHint: '访问令牌已过期；下次模型请求会尝试自动刷新。若刷新失败，请重新登录。',
         incompleteHint: '已存凭据缺少必要信息，请重新登录。',
         error: '操作失败，请检查网络与账户权限后重试。',
+        patchPreview: '检查缺失模型', patchApply: '确认补充缺失模型', patchEmpty: '没有可补充的模型', patchError: '无法安全获取或应用 Codex 模型列表，请稍后重试。', patchCount: '拟补充模型', patchPreserved: '保留模型', patchUnverified: '待核实', patchFallback: '远端目录不可用，以下仅为本机目录；未写入补丁', patchLimited: '未支持推理等级', patchTotal: '远端条目', patchDetails: '查看模型与来源详情', logoutShort: '退出登录', plan: '订阅',
       },
       en: {
         login: 'Sign in to ChatGPT', relogin: 'Sign in again', disconnected: 'No ChatGPT account connected', connected: 'Connected', expired: 'Credential awaiting refresh', incomplete: 'Incomplete credential', pending: 'Waiting for authorization…',
@@ -108,6 +120,7 @@ window.__ModuleLoader__.load({
         expiredHint: 'Access token expired; the next model request will attempt an automatic refresh. Sign in again if it fails.',
         incompleteHint: 'The stored credential is missing required fields. Sign in again.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
+        patchPreview: 'Check missing models', patchApply: 'Confirm missing model patch', patchEmpty: 'No missing models to add', patchError: 'Cannot safely retrieve or apply Codex models. Try again later.', patchCount: 'Models to add', patchPreserved: 'Preserved models', patchUnverified: 'Unverified', patchFallback: 'Remote catalog unavailable; installed models only. No patch applied.', patchLimited: 'Unsupported reasoning efforts', patchTotal: 'Remote entries', patchDetails: 'Model and source details', logoutShort: 'Sign out', plan: 'Plan',
       },
     }
 
@@ -245,6 +258,25 @@ window.__ModuleLoader__.load({
       const connection = (globalThis.__DSH_CHATGPT_MANAGEMENT__ ?? {})[CODEX_ROUTE]
       const controller = React.useRef<ReturnType<typeof createController> | undefined>(undefined)
       const [state, setState] = useState<Snapshot>({ loading: true, busy: false, status: undefined, error: false })
+      const [patch, setPatch] = useState<PatchPreview | undefined>(undefined)
+      const [patchBusy, setPatchBusy] = useState(false)
+      const [patchError, setPatchError] = useState(false)
+      const inspectPatch = async (apply = false) => {
+        if (!connection || patchBusy) return
+        setPatchBusy(true); setPatchError(false)
+        try {
+          const response = await fetch(`${connection.path}/${apply ? 'models-apply' : 'models-preview'}`, {
+            method: apply ? 'POST' : 'GET',
+            headers: { 'x-dsh-chatgpt-token': connection.token, ...(apply && patch ? { 'x-dsh-model-patch': patch.signature } : {}) },
+            credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+          })
+          if (!response.ok) throw new Error('Model patch unavailable')
+          if (apply) { setPatch(undefined); return }
+          const value = await response.json() as PatchPreview
+          setPatch(value)
+        } catch { setPatch(undefined); setPatchError(true) }
+        finally { setPatchBusy(false) }
+      }
       useEffect(() => {
         if (provider?.provider !== CODEX_ROUTE) return
         if (connection === undefined) { setState(current => ({ ...current, loading: false })); return }
@@ -271,13 +303,14 @@ window.__ModuleLoader__.load({
           : connected ? (account?.name || account?.email || t('connected')) : t('disconnected')
       const note = expired ? t('expiredHint') : incomplete ? t('incompleteHint')
         : connected
-          ? [account?.plan && `plan: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
+          ? [account?.plan && `${t('plan')}: ${account.plan}`, account?.expires && `${t('expires')} ${new Date(account.expires).toLocaleDateString()}`].filter(Boolean).join(' · ')
           : t('hint')
       const loginUrl = status?.notice?.url
       const button = (text: string, variant: string, action: () => void) => h('button', {
         type: 'button', className: 'dsh-chatgpt-button', 'data-variant': variant,
-        disabled: state.loading || state.busy, onClick: action,
-      }, state.busy ? h('span', { className: 'dsh-chatgpt-spinner' }) : null, text)
+        disabled: state.loading || state.busy || patchBusy, onClick: action,
+        title: variant === 'danger' && stored && !pending ? t('logout') : undefined,
+      }, state.busy || patchBusy ? h('span', { className: 'dsh-chatgpt-spinner', 'aria-hidden': 'true' }) : null, text)
       return h('div', { className: 'dsh-chatgpt-card' },
         h('div', { className: 'dsh-chatgpt-identity' },
           h('span', { className: 'dsh-chatgpt-avatar', 'aria-hidden': 'true' },
@@ -289,12 +322,24 @@ window.__ModuleLoader__.load({
             note && h('p', { className: 'dsh-chatgpt-note' }, note))),
         loginUrl && h('p', { className: 'dsh-chatgpt-notice' },
           h('a', { className: 'dsh-chatgpt-link', href: loginUrl, target: '_blank', rel: 'noopener noreferrer' }, t('open'))),
-        h('div', { className: 'dsh-chatgpt-actions' },
+        h('div', { className: 'dsh-chatgpt-actions', 'aria-busy': state.busy || patchBusy },
+          status?.patchAvailable && connected && !pending && button(t('patchPreview'), 'secondary', () => void inspectPatch()),
           pending ? button(t('cancel'), 'danger', () => void controller.current?.act('cancel'))
-            : connected ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))
+            : connected ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logoutShort'), 'danger', () => void controller.current?.act('logout')))
               : button(t(stored ? 'relogin' : 'login'), 'primary', () => void controller.current?.act('login')),
-          stored && !connected && !pending && h('span', { className: 'dsh-chatgpt-push' }, button(t('logout'), 'danger', () => void controller.current?.act('logout')))),
-        state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')))
+          stored && !connected && !pending && h('span', { className: 'dsh-chatgpt-push' }, button(t('logoutShort'), 'danger', () => void controller.current?.act('logout')))),
+        state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')),
+
+        patch && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
+          h('p', { className: 'dsh-chatgpt-preview-title' }, patch.unavailable ? t('patchFallback') : patch.added.length ? `${t('patchCount')} (${patch.added.length})` : t('patchEmpty')),
+          !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-models' }, ...patch.added.map(id => h('span', { key: id, className: 'dsh-chatgpt-model' }, id))),
+          h('p', { className: 'dsh-chatgpt-note' }, `${t('patchPreserved')}: ${patch.preserved.length} · ${t('patchTotal')}: ${patch.total} · ${t('patchUnverified')}: ${patch.unsupported}`),
+          h('details', { className: 'dsh-chatgpt-details' }, h('summary', null, t('patchDetails')),
+            h('p', { className: 'dsh-chatgpt-note' }, patch.preserved.join(', ')),
+            h('p', { className: 'dsh-chatgpt-note' }, `${t('patchLimited')}: ${patch.limited?.map(item => `${item.id} (${item.omittedEfforts.join(', ')})`).join('; ') || '0'}`),
+            h('p', { className: 'dsh-chatgpt-note' }, patch.source)),
+          !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-actions' }, button(t('patchApply'), 'primary', () => void inspectPatch(true)))),
+        patchError && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('patchError')))
     }
 
     function apply(ctx: ClientContext) {
