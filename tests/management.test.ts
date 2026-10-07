@@ -63,6 +63,8 @@ test('management routes require the injected capability and POST for state chang
       return { added: ['gpt-6.1-sol'], signature: 'a'.repeat(64) }
     },
     async fallback(reason) { return { unavailable: 'listing unavailable', reason, added: [] } },
+    async restorePreview() { if (refusal) throw new PatchError(refusal, 'refused'); return { kind: 'restore', signature: 'b'.repeat(64) } },
+    async restore(signature) { if (refusal) throw new PatchError(refusal, 'refused'); assert.equal(signature, 'b'.repeat(64)); return { restored: true, applied: [] } },
     async apply(signature) {
       if (refusal) throw new PatchError(refusal, 'refused for the test')
       assert.equal(signature, 'a'.repeat(64))
@@ -93,6 +95,11 @@ test('management routes require the injected capability and POST for state chang
   // A malformed confirmation is reported as a conflict, not as a source failure.
   assert.equal((await request('/models-apply', 'POST', token, 'nope')).body.reason, 'conflict')
   assert.deepEqual((await request('/models-apply', 'POST', token, 'a'.repeat(64))).body.applied, ['gpt-6.1-sol'])
+  assert.equal((await request('/models-restore-preview', 'GET', 'wrong')).code, 403)
+  assert.equal((await request('/models-restore', 'GET')).code, 405)
+  assert.equal((await request('/models-restore-preview', 'GET')).body.kind, 'restore')
+  assert.equal((await request('/models-restore', 'POST', token, 'nope')).body.reason, 'conflict')
+  assert.equal((await request('/models-restore', 'POST', token, 'b'.repeat(64))).body.restored, true)
 
   // Each refusal reason survives the route: the read-only fallback keeps the
   // reason it was refused for, and the status code separates a stale
@@ -102,6 +109,8 @@ test('management routes require the injected capability and POST for state chang
     ['settings-read-only', 200, '/models-preview', 'GET'],
     ['registration-unconfirmed', 400, '/models-apply', 'POST'],
     ['conflict', 409, '/models-apply', 'POST'],
+    ['conflict', 409, '/models-restore', 'POST'],
+    ['native-catalog-unavailable', 400, '/models-restore-preview', 'GET'],
   ]) {
     refusal = reason
     const answer = await request(operation, method, token, 'a'.repeat(64))
@@ -145,6 +154,8 @@ test('no route response or injected script ever carries the stored OAuth credent
     async preview() { return { added: ['gpt-6.1-sol'], preserved: [], total: 1, unsupported: 0, signature: 'a'.repeat(64), source: 'https://chatgpt.com/backend-api/codex/models' } },
     async fallback(reason) { return { unavailable: 'unavailable', reason, added: [] } },
     async apply() { return { applied: ['gpt-6.1-sol'] } },
+    async restorePreview() { return { kind: 'restore', signature: 'b'.repeat(64) } },
+    async restore() { return { restored: true, applied: [] } },
   }
   registerCodexManagement(web, manager, () => patch)
   const table = []
@@ -163,6 +174,7 @@ test('no route response or injected script ever carries the stored OAuth credent
   for (const [operation, method, signature] of [
     ['/status', 'GET'], ['/login', 'POST'], ['/cancel', 'POST'], ['/logout', 'POST'],
     ['/models-preview', 'GET'], ['/models-apply', 'POST', 'a'.repeat(64)],
+    ['/models-restore-preview', 'GET'], ['/models-restore', 'POST', 'b'.repeat(64)],
   ]) await request(operation, method, signature)
 
   const whole = received.join('\n')

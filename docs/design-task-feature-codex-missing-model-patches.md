@@ -74,7 +74,7 @@
 | `visibility: list` | 7（`gpt-6.1-sol`、`gpt-6-astra`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`） |
 | `visibility: hide` | 3（`gpt-reserve`、`gpt-5.5`、`codex-auto-review`，按设计排除） |
 | 目标收录 | `gpt-6.1-sol` **存在**（`input=[text,image]`、6 个等级） |
-| 容量字段 | `context_window=272000`（长上下文计费档位起点）与 `max_context_window=872000`（账号可声明的上限） |
+| 容量字段 | `context_window=272000`（模型窗口）与 `max_context_window=872000`（配置覆盖上限） |
 | 能力字段不足而丢弃 | 0（10 条均有 `context_window`、`input_modalities` 与 `supported_reasoning_levels`） |
 | 被省略等级 | 5 个模型各有 `ultra`（pi-ai `THINKING_LEVELS` 无此项，按设计省略并记录；`gpt-6-luna` / `gpt-5.6-luna` 为 5 个等级，不含 `ultra`） |
 
@@ -103,27 +103,26 @@
 | 覆盖轮次 | turn 9（18）、turn 10（14）、turn 11（5） |
 | 结束原因 | `toolUse` ×34、`stop` ×3 |
 | 时间窗 | 2026-10-07 01:39:25Z – 01:53:00Z |
-| 上下文窗口 | 补丁写入 `contextWindow: 272000`（当时取的是计费档位；语义修正见下节） |
+| 上下文窗口 | 补丁写入 `contextWindow: 272000`，与来源的 `context_window` 一致 |
 
 「可选中 + 实际推理」双重条件均达成。该路由在后续会话中亦正常使用（另一会话 `openai-codex/gpt-6-sol` 71 次）。
 
-### 上下文容量取 `max_context_window`
+### 上下文容量取 `context_window`
 
 实测确认该端点对每个条目同时返回两个容量字段，二者语义不同（依据 [openai_models.rs](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs) 的字段注释与 [AWS Bedrock 模型卡](https://docs.aws.eu//bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html)）：
 
 | 字段 | `gpt-6.1-sol` 实测值 | 语义 |
 | --- | --- | --- |
-| `context_window` | 272000 | 长上下文计费档位起点。Bedrock 写明「Long-context rates apply … when input exceeds 272,000 tokens」，说明它是价格分界，不是可用上限 |
-| `max_context_window` | 872000 | 账号可声明的上下文上限 |
+| `context_window` | 272000 | 模型自身的窗口。Bedrock 的「Long-context rates apply … when input exceeds 272,000 tokens」说明它同时是长上下文计费的分界 |
+| `max_context_window` | 872000 | 「配置覆盖允许达到的上限」（上游字段注释原文：*Maximum context window allowed for config overrides*） |
 
-Codex CLI 自身的 `resolved_context_window()` 取 `context_window.or(max_context_window)`——它优先取计费档位，因为 CLI 允许用 `model_context_window` 覆盖且以 max 为上限。但 DSH 路径没有这样的覆盖机制：它把该值直接当作压缩阈值（约 90% 触发），因此采用计费档位会让适配器远早于账号实际能力开始压缩。
+**决定：取 `context_window`，缺失时回退 `max_context_window`。** 与上游 `resolved_context_window()`（`context_window.or(max_context_window)`）一致；两个字段都没有的条目按「能力信息不足」丢弃，不猜测容量。
 
-**决定：取 `max_context_window`，缺失时回退 `context_window`。** 两个字段都没有的条目仍按「能力信息不足」丢弃，不猜测容量。
+> **本节曾一度改为优先 `max_context_window`（方案 A），现已回退。** 当时的理由是 Bedrock 把 272,000 写成计费分界、而 DSH 没有 CLI 那样的 `model_context_window` 覆盖机制，担心压缩过早。回退的理由是更根本的一条：`max_context_window` 的语义是**覆盖上限**而非模型窗口，把它声明为窗口等于插件单方面放大一个用户没有选择的额度；`context_window` 才是模型自报的容量，也是上游解析的第一顺位。需要更大窗口时，显式配置 `contextWindow` 即可——那是用户在宿主设置页可见、可改的选择。
 
-需要一并说明的两点：
+因此已写入显式 `contextWindow` 的条目仍**不会被改写**。当声明值低于来源给出的窗口时，预览以「声明的上下文小于来源给出的窗口: gpt-6.1-sol (128000 → 272000)」报告，供人工决定。
 
-- Bedrock 模型卡标注 **1M**（1,050,000），而 Codex OAuth 端点报 872000。二者很可能是不同产品面的差异（托管版 vs OAuth 路径），本插件以**端点自报的账号可用值**为准，不采用文档数字。
-- 已写入显式 `contextWindow` 的条目**不会被改写**（那是用户自己的配置）。当声明值低于来源可用值时，预览以「声明的上下文小于来源可用值: gpt-6.1-sol (272000 → 872000)」报告，供人工决定，不自动覆盖。
+Bedrock 模型卡标注 **1M**（1,050,000），与 Codex OAuth 端点报的 272000/872000 都不同。二者很可能是不同产品面的差异（托管版 vs OAuth 路径），本插件以**端点自报值**为准，不采用文档数字。
 
 ### 已实现范围
 

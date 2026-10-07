@@ -6,7 +6,12 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === '@deepseek-ai/dsh-credentials') return { url: 'data:text/javascript,' + encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id"), shortCircuit: true }
   return next(specifier, context)
 } })
-const { createModelPatches, parseRemoteCatalog, fetchCodexCatalog } = await import('../lib/model-patches.js')
+const { createModelPatches: createPatches, parseRemoteCatalog, fetchCodexCatalog } = await import('../lib/model-patches.js')
+const createModelPatches = (ctx, services, fetcher, options = {}) => createPatches(ctx, services, fetcher, {
+  host: async () => undefined,
+  clientVersion: async () => ({ value: '0.160.1', source: 'builtin' }),
+  wait: async () => {}, ...options,
+})
 hooks.deregister()
 
 const model = (slug, other = {}) => ({ slug, display_name: slug, visibility: 'list', supported_in_api: false, context_window: 272000, input_modalities: ['text'], supported_reasoning_levels: [{ effort: 'medium' }], ...other })
@@ -48,22 +53,24 @@ test('remote listing retains ChatGPT-only models and refuses duplicate identifie
   assert.throws(() => parseRemoteCatalog({ models: [] }), /incomplete/)
 })
 
-test('the declared capacity is the usable maximum, not the billing boundary', () => {
-  // The live endpoint reports both; only the maximum is the usable ceiling.
+test("the declared capacity is the model's own window, not the override ceiling", () => {
+  // The live endpoint reports both; the window itself wins, exactly as
+  // upstream's resolved_context_window() reads it.
   const live = parseRemoteCatalog({ models: [model('gpt-6.1-sol', { context_window: 272000, max_context_window: 872000 })] })
-  assert.equal(live.entries[0].contextWindow, 872000)
+  assert.equal(live.entries[0].contextWindow, 272000)
 
-  // A listing that omits the maximum still declares the model's own window.
-  const fallback = parseRemoteCatalog({ models: [model('gpt-6.1-sol', { context_window: 272000, max_context_window: null })] })
-  assert.equal(fallback.entries[0].contextWindow, 272000)
+  // A listing that omits the window falls back to the ceiling rather than
+  // declaring nothing.
+  const fallback = parseRemoteCatalog({ models: [model('gpt-6.1-sol', { context_window: null, max_context_window: 872000 })] })
+  assert.equal(fallback.entries[0].contextWindow, 872000)
 
   // Neither present means the entry is unrepresentable, so it is dropped
   // rather than given an invented capacity.
   assert.throws(() => parseRemoteCatalog({ models: [model('solo', { context_window: null, max_context_window: undefined })] }), /no serviceable/)
 
-  // A non-positive maximum does not silently displace a sane window.
-  const zeroed = parseRemoteCatalog({ models: [model('zeroed', { context_window: 272000, max_context_window: 0 })] })
-  assert.equal(zeroed.entries[0].contextWindow, 272000)
+  // A non-positive window does not displace the available ceiling.
+  const zeroed = parseRemoteCatalog({ models: [model('zeroed', { context_window: 0, max_context_window: 872000 })] })
+  assert.equal(zeroed.entries[0].contextWindow, 872000)
 })
 
 test('preview preserves existing catalog and adds only missing model after confirmation', async () => {
@@ -212,9 +219,9 @@ test('preview reports the account listing, its age, and the empty-state distinct
   assert.deepEqual(unavailable.unlisted, [])
 })
 
-test('a capacity below the source maximum is reported, never rewritten', async () => {
-  // The profile declares the billing boundary; the source now allows more.
-  const stale = { id: 'gpt-6.1-sol', contextWindow: 272000 }
+test('a capacity below the source value is reported, never rewritten', async () => {
+  // The profile declares less than the model's own window.
+  const stale = { id: 'gpt-6.1-sol', contextWindow: 128000 }
   const settings = {
     writable: true,
     describe: () => [{ ns: 'llm-pi-ai', revision: 5, value: { providers: { 'openai-codex': { models: [stale] } } }, user: { providers: { 'openai-codex': { models: [stale] } } } }],
@@ -228,10 +235,10 @@ test('a capacity below the source maximum is reported, never rewritten', async (
   )
   const view = await patches.preview()
   assert.deepEqual(view.added, [], 'nothing to add: the model is already selectable')
-  assert.deepEqual(view.understated, [{ id: 'gpt-6.1-sol', declared: 272000, source: 872000 }])
+  assert.deepEqual(view.understated, [{ id: 'gpt-6.1-sol', declared: 128000, source: 272000 }])
 
-  // A value already at the source maximum is not flagged.
-  const current = { id: 'gpt-6.1-sol', contextWindow: 872000 }
+  // A value already at the source window is not flagged.
+  const current = { id: 'gpt-6.1-sol', contextWindow: 272000 }
   const aligned = createModelPatches(
     { credentials: { async readRecord() { return { kind: 'grant', payload: { access: 'test-access', accountId: 'account-1', expires: Date.now() + 60_000 } } } } },
     { settings: { ...settings, describe: () => [{ ns: 'llm-pi-ai', revision: 5, value: { providers: { 'openai-codex': { models: [current] } } }, user: { providers: { 'openai-codex': { models: [current] } } } }] }, llm },
@@ -301,4 +308,150 @@ test('a credential that is missing, expired or account-less never reaches the li
     assert.equal(fetched, false, label)
     assert.equal(settings.route.models, undefined, label)
   }
+})
+
+test('remote and runtime traversal order do not invalidate a confirmation', async () => {
+  const { ctx, settings } = fixture()
+  let reverse = false
+  const source = [model('a', { input_modalities: ['image', 'text'], supported_reasoning_levels: [{ effort: 'high' }, { effort: 'low' }, { effort: 'ultra' }, { effort: 'future' }] }), model('new')]
+  const llm = { listModels: async () => settings.route.models ?? (reverse ? [{ id: 'b' }, { id: 'a' }] : [{ id: 'a' }, { id: 'b' }]) }
+  const patches = createModelPatches(ctx, { settings, llm }, async () => {
+    const values = reverse ? [...source].reverse().map(value => ({ ...value, input_modalities: [...value.input_modalities].reverse(), supported_reasoning_levels: [...value.supported_reasoning_levels].reverse() })) : source
+    return new Response(JSON.stringify({ models: values }))
+  })
+  const preview = await patches.preview()
+  reverse = true
+  assert.equal((await patches.preview()).signature, preview.signature)
+  assert.deepEqual((await patches.apply(preview.signature)).applied, ['new'])
+})
+
+test('a semantic catalog change still invalidates a confirmation', async () => {
+  const { ctx, settings, llm } = fixture()
+  let capacity = 272000
+  const patches = createModelPatches(ctx, { settings, llm }, async () => new Response(JSON.stringify({ models: [model('new', { context_window: capacity })] })))
+  const preview = await patches.preview()
+  capacity++
+  await assert.rejects(patches.apply(preview.signature), error => error.reason === 'conflict')
+  assert.equal(settings.route.models, undefined)
+})
+
+test('refreshable expired credentials are refreshed and reread before catalog access', async () => {
+  const { settings, llm } = fixture()
+  let grant = { access: 'expired-access', refresh: 'r', accountId: 'old-account', expires: 1 }
+  let refreshed = 0
+  const ctx = { credentials: { readRecord: async () => ({ kind: 'grant', payload: grant }) } }
+  const patches = createModelPatches(ctx, { settings, llm }, async (_url, init) => {
+    assert.equal(init.headers.authorization, 'Bearer new-access')
+    assert.equal(init.headers['chatgpt-account-id'], 'new-account')
+    return new Response(JSON.stringify({ models: [model('new')] }))
+  }, { host: async () => ({ models: [], refreshCredential: async () => {
+    refreshed++
+    grant = { ...grant, access: 'new-access', accountId: 'new-account', expires: Date.now() + 60_000 }
+  } }) })
+  const preview = await patches.preview()
+  assert.deepEqual(preview.added, ['new'])
+  assert.equal(refreshed, 1)
+  assert.ok(!JSON.stringify(preview).includes('new-access'))
+})
+
+test('refresh failure never fetches a catalog or exposes provider errors', async () => {
+  const { settings, llm } = fixture()
+  const ctx = { credentials: { readRecord: async () => ({ kind: 'grant', payload: { access: 'secret', refresh: 'secret-refresh', accountId: 'a', expires: 1 } }) } }
+  let requests = 0
+  const patches = createModelPatches(ctx, { settings, llm }, async () => { requests++; throw new Error('unexpected') }, {
+    host: async () => ({ models: [], refreshCredential: async () => { throw new Error('secret-refresh') } }),
+  })
+  await assert.rejects(patches.preview(), error => error.reason === 'credential-expired' && !error.message.includes('secret'))
+  assert.equal(requests, 0)
+  assert.equal(settings.route.models, undefined)
+})
+
+test('registration confirmation observes delayed state without repeating the write', async () => {
+  const { ctx, settings } = fixture()
+  let refreshed = false, writes = 0
+  const llm = { listModels: async () => refreshed ? settings.route.models : [{ id: 'gpt-6-sol' }] }
+  const mutate = settings.mutate.bind(settings)
+  settings.mutate = async (...args) => { writes++; await mutate(...args) }
+  const delays = []
+  const patches = createModelPatches(ctx, { settings, llm }, remote([model('new')]), {
+    wait: async ms => { delays.push(ms); refreshed = true },
+  })
+  await patches.apply((await patches.preview()).signature)
+  assert.equal(writes, 1)
+  assert.deepEqual(delays, [100])
+})
+
+test('permanently unconfirmed registration is bounded and leaves a saved patch intact', async () => {
+  const { ctx, settings } = fixture()
+  const llm = { listModels: async () => [{ id: 'gpt-6-sol' }] }
+  const delays = []
+  const patches = createModelPatches(ctx, { settings, llm }, remote([model('new')]), { wait: async ms => { delays.push(ms) } })
+  await assert.rejects(patches.apply((await patches.preview()).signature), error => error.reason === 'registration-unconfirmed')
+  assert.deepEqual(delays, [100, 250, 500, 1000])
+  assert.ok(settings.route.models.some(model => model.id === 'new'))
+})
+
+test('rechecking an explicit snapshot includes new native models without overwriting custom fields', async () => {
+  const custom = { id: 'gpt-6-sol', contextWindow: 123456 }
+  const { ctx, settings, llm } = fixture({ configured: { models: [custom], reasoning: 'medium' } })
+  const patches = createModelPatches(ctx, { settings, llm }, remote([model('gpt-6-sol')]), {
+    host: async () => ({ models: [{ id: 'gpt-6-sol' }, { id: 'native-new' }], refreshCredential: async () => {} }),
+  })
+  const preview = await patches.preview()
+  assert.deepEqual(preview.nativeAdded, ['native-new'])
+  await patches.apply(preview.signature)
+  assert.deepEqual(settings.route.models, [custom, { id: 'native-new' }])
+  assert.equal(settings.route.reasoning, 'medium')
+})
+
+test('restoring native defaults requires a separate preview and preserves other settings', async () => {
+  const { ctx, settings } = fixture({ configured: { models: [{ id: 'gpt-6-sol', contextWindow: 123 }, { id: 'custom' }], reasoning: 'high' } })
+  const llm = { listModels: async () => settings.route.models.length ? settings.route.models : [{ id: 'gpt-6-sol' }, { id: 'native-new' }] }
+  const patches = createModelPatches(ctx, { settings, llm }, async () => { throw new Error('restoration must not require OAuth or network') }, {
+    host: async () => ({ models: [{ id: 'gpt-6-sol' }, { id: 'native-new' }], refreshCredential: async () => { throw new Error('unexpected') } }),
+  })
+  const preview = await patches.restorePreview()
+  assert.deepEqual(preview.removed, ['custom'])
+  assert.deepEqual(preview.resets, ['gpt-6-sol', 'custom'])
+  assert.equal(settings.route.models.length, 2)
+  await assert.rejects(patches.restore('f'.repeat(64)), error => error.reason === 'conflict')
+  const applied = await patches.restore(preview.signature)
+  assert.equal(applied.restored, true)
+  assert.deepEqual(applied.before.models, ['gpt-6-sol', 'custom'])
+  assert.deepEqual(settings.route.models, [])
+  assert.equal(settings.route.reasoning, 'high')
+  assert.equal((await patches.restorePreview()).signature, '')
+})
+
+test('native restoration refuses absent catalogs, read-only settings and stale revisions', async () => {
+  const { patches, settings, ctx, llm } = fixture({ configured: { models: [{ id: 'custom' }] } })
+  await assert.rejects(patches.restorePreview(), error => error.reason === 'native-catalog-unavailable')
+  const options = { host: async () => ({ models: [{ id: 'gpt-6-sol' }], refreshCredential: async () => {} }) }
+  const guarded = createModelPatches(ctx, { settings: { ...settings, writable: false }, llm }, remote([]), options)
+  await assert.rejects(guarded.restorePreview(), error => error.reason === 'settings-read-only')
+  const restore = createModelPatches(ctx, { settings, llm }, remote([]), options)
+  const preview = await restore.restorePreview()
+  await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', 'openai-codex', 'models'], value: [{ id: 'user-edit' }] }], preview.revision)
+  await assert.rejects(restore.restore(preview.signature), error => error.reason === 'conflict')
+  assert.deepEqual(settings.route.models, [{ id: 'user-edit' }])
+})
+
+test('output limits are mapped only when supplied and maximum context is kept diagnostic', async () => {
+  const parsed = parseRemoteCatalog({ models: [model('new', { context_window: 272000, max_context_window: 872000, max_output_tokens: 12345 })] })
+  assert.equal(parsed.entries[0].maxTokens, 12345)
+  assert.deepEqual(parsed.windows, [{ id: 'new', contextWindow: 272000, maxContextWindow: 872000 }])
+  const { patches } = fixture()
+  const preview = await patches.preview()
+  assert.equal(preview.capabilityStatus, 'catalog-only')
+  assert.deepEqual(preview.inheritedOutputLimits, ['gpt-6.1-sol'])
+  assert.equal((await patches.apply(preview.signature)).capabilityStatus, 'registered-only')
+})
+
+test('oversized explicit context is reported without overriding the user choice', async () => {
+  const configured = { models: [{ id: 'gpt-6-sol', contextWindow: 872000 }] }
+  const { patches, settings } = fixture({ configured })
+  const preview = await patches.preview()
+  assert.deepEqual(preview.overstated, [{ id: 'gpt-6-sol', declared: 872000, source: 272000 }])
+  await patches.apply(preview.signature)
+  assert.equal(settings.route.models[0].contextWindow, 872000)
 })

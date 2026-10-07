@@ -23,7 +23,7 @@ type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; er
 type Connection = { path: string; token: string }
 type PatchReason = 'settings-unavailable' | 'settings-read-only' | 'route-missing' | 'sign-in-required'
   | 'credential-expired' | 'credential-incomplete' | 'source-unavailable' | 'config-unmergeable'
-  | 'conflict' | 'registration-unconfirmed'
+  | 'conflict' | 'registration-unconfirmed' | 'native-catalog-unavailable'
 type PatchPreview = {
   added: string[]
   preserved: string[]
@@ -40,7 +40,19 @@ type PatchPreview = {
   alreadySelectable?: string[]
   unlisted?: string[]
   understated?: { id: string; declared: number; source: number }[]
+  overstated?: { id: string; declared: number; source: number }[]
   replacesCatalog?: boolean
+  kind?: 'restore'
+  removed?: string[]
+  resets?: string[]
+  restored?: boolean
+  nativeAdded?: string[]
+  nativeAvailable?: boolean
+  hasExplicitCatalog?: boolean
+  clientVersionSource?: string
+  capabilityStatus?: 'catalog-only' | 'registered-only'
+  inheritedOutputLimits?: string[]
+  windows?: { id: string; contextWindow: number; maxContextWindow?: number }[]
 }
 type PatchApplied = PatchPreview & {
   applied: string[]
@@ -137,8 +149,15 @@ window.__ModuleLoader__.load({
         incompleteHint: '已存凭据缺少必要信息，请重新登录。',
         error: '操作失败，请检查网络与账户权限后重试。',
         patchPreview: '检查缺失模型', patchApply: '确认补充缺失模型', patchEmpty: '没有可补充的模型', patchError: '无法安全获取或应用 Codex 模型列表，请稍后重试。', patchCount: '拟补充模型', patchPreserved: '保留模型', patchUnverified: '待核实', patchFallback: '远端目录不可用，以下仅为本机目录；未写入补丁', patchLimited: '未支持推理等级', patchTotal: '远端条目', patchDetails: '查看模型与来源详情', logoutShort: '退出登录', plan: '订阅',
-        patchSelected: '当前可选', patchSourceAt: '列表获取于', patchClient: '请求版本', patchWrites: '写入后列表', patchHandover: '显式 models 会接管整个目录：未列出的模型将不可选。', patchUnlisted: '来源未收录（保留但来源列表中没有）', patchUnderstated: '声明的上下文小于来源可用值',
+        patchSelected: '当前可选', patchSourceAt: '列表获取于', patchClient: '请求版本', patchWrites: '写入后列表', patchHandover: '显式 models 会接管整个目录：未列出的模型将不可选。', patchUnlisted: '来源未收录（保留但来源列表中没有）', patchUnderstated: '声明的上下文小于来源给出的窗口',
         patchApplied: '已补充模型', patchRevision: '配置修订',
+        patchRestore: '检查恢复原生目录', patchRestoreConfirm: '确认恢复原生目录', patchRestored: '已恢复原生目录', patchRestoreEmpty: '已使用原生目录，无需恢复',
+        patchRestoreWarning: '确认后清空显式 models，恢复当前安装的 pi-ai 目录。下列条目的显式能力配置将被移除，非原生模型将不可选；其它路由设置不变。',
+        patchRemoved: '将不再可选', patchResets: '将恢复默认能力的条目', patchNativeAdded: '同步的原生模型',
+        patchCatalogOnly: '仅验证目录信息；尚未验证实际推理或完整协议能力。', patchRegisteredOnly: '仅确认模型已注册；未执行推理，完整能力仍取决于已安装 pi-ai。',
+        patchOverstated: '显式上下文大于远端默认窗口（保留已有配置；若非有意覆盖，请检查模型设置或恢复原生目录）',
+        patchOutputDefaults: '以下模型未提供输出上限，使用宿主默认值', patchWindows: '上下文窗口 / 最大配置覆盖上限',
+        reasonNative: '无法读取已安装的原生目录，未修改显式模型列表。',
         reasonSettingsUnavailable: '模型设置服务不可用。', reasonSettingsReadOnly: '模型设置为只读，无法写入补丁。', reasonRouteMissing: '尚未声明 openai-codex 路由；请先在模型页用「从目录添加」声明它。', reasonSignIn: '请先登录 ChatGPT。', reasonExpired: '凭据已过期，请重新登录或等待刷新后重试。', reasonIncomplete: '凭据缺少 account ID，请重新登录。', reasonSource: '无法获取 Codex 模型列表（网络或接口不可用），未写入任何模型。', reasonConfig: '现有模型配置无法安全合并，未做改动。', reasonConflict: '模型来源或配置已变化，请重新预览后再确认。', reasonRegistration: '配置已写入，但模型未能注册；请检查宿主设置。',
       },
       en: {
@@ -149,8 +168,15 @@ window.__ModuleLoader__.load({
         incompleteHint: 'The stored credential is missing required fields. Sign in again.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
         patchPreview: 'Check missing models', patchApply: 'Confirm missing model patch', patchEmpty: 'No missing models to add', patchError: 'Cannot safely retrieve or apply Codex models. Try again later.', patchCount: 'Models to add', patchPreserved: 'Preserved models', patchUnverified: 'Unverified', patchFallback: 'Remote catalog unavailable; installed models only. No patch applied.', patchLimited: 'Unsupported reasoning efforts', patchTotal: 'Remote entries', patchDetails: 'Model and source details', logoutShort: 'Sign out', plan: 'Plan',
-        patchSelected: 'Currently selectable', patchSourceAt: 'Listing fetched', patchClient: 'Requested as', patchWrites: 'Catalogue after writing', patchHandover: 'An explicit models list replaces the whole catalogue: models not listed here become unselectable.', patchUnlisted: 'Not in the source listing (kept anyway)', patchUnderstated: 'Declared context below the available source value',
+        patchSelected: 'Currently selectable', patchSourceAt: 'Listing fetched', patchClient: 'Requested as', patchWrites: 'Catalogue after writing', patchHandover: 'An explicit models list replaces the whole catalogue: models not listed here become unselectable.', patchUnlisted: 'Not in the source listing (kept anyway)', patchUnderstated: 'Declared context below the window the source gives',
         patchApplied: 'Models added', patchRevision: 'Config revision',
+        patchRestore: 'Review native catalog restoration', patchRestoreConfirm: 'Confirm native catalog restoration', patchRestored: 'Native catalog restored', patchRestoreEmpty: 'Already using the native catalog',
+        patchRestoreWarning: 'Confirmation clears explicit models and restores the installed pi-ai catalog. Explicit capabilities on these entries will be removed and non-native models become unavailable; other route settings stay unchanged.',
+        patchRemoved: 'Models becoming unavailable', patchResets: 'Entries reverting to default capabilities', patchNativeAdded: 'Native models synchronized',
+        patchCatalogOnly: 'Catalog metadata only; inference and full protocol capabilities have not been verified.', patchRegisteredOnly: 'Registration confirmed only; no inference was run. Full capabilities depend on the installed pi-ai.',
+        patchOverstated: 'Explicit context exceeds the remote default (preserved; if unintended, review model settings or restore the native catalog)',
+        patchOutputDefaults: 'These models omit an output limit and use the host default', patchWindows: 'Context window / maximum configuration override',
+        reasonNative: 'The installed native catalog cannot be read. Explicit models were not changed.',
         reasonSettingsUnavailable: 'The model settings service is unavailable.', reasonSettingsReadOnly: 'Model settings are read-only, so no patch can be written.', reasonRouteMissing: 'The openai-codex route is not declared yet; add it from the catalog on the Models page first.', reasonSignIn: 'Sign in to ChatGPT first.', reasonExpired: 'The credential expired. Sign in again, or retry after it refreshes.', reasonIncomplete: 'The credential has no account ID. Sign in again.', reasonSource: 'The Codex model listing could not be retrieved (network or endpoint). No model was added.', reasonConfig: 'The existing model configuration cannot be safely merged; nothing was changed.', reasonConflict: 'The model source or configuration changed. Preview again before confirming.', reasonRegistration: 'The configuration was saved, but the models did not register. Check the host settings.',
       },
     }
@@ -297,6 +323,7 @@ window.__ModuleLoader__.load({
       'config-unmergeable': 'reasonConfig',
       'conflict': 'reasonConflict',
       'registration-unconfirmed': 'reasonRegistration',
+      'native-catalog-unavailable': 'reasonNative',
     }
     const reasonKey = (reason: PatchReason) => REASON_KEYS[reason] ?? REASON_KEYS['source-unavailable']
 
@@ -317,11 +344,13 @@ window.__ModuleLoader__.load({
        * reporting every failure as an unreachable source. An HTTP-level
        * refusal without a body falls back to the generic reason.
        */
-      const inspectPatch = async (apply = false) => {
+      const inspectPatch = async (apply = false, restore = false) => {
         if (!connection || patchBusy) return
-        setPatchBusy(true); setPatchReason(undefined)
+        setPatchBusy(true); setPatchReason(undefined); setApplied(undefined)
         try {
-          const response = await fetch(`${connection.path}/${apply ? 'models-apply' : 'models-preview'}`, {
+          const restoring = restore || (apply && patch?.kind === 'restore')
+          const operation = restoring ? (apply ? 'models-restore' : 'models-restore-preview') : (apply ? 'models-apply' : 'models-preview')
+          const response = await fetch(`${connection.path}/${operation}`, {
             method: apply ? 'POST' : 'GET',
             headers: { 'x-dsh-chatgpt-token': connection.token, ...(apply && patch ? { 'x-dsh-model-patch': patch.signature } : {}) },
             credentials: 'same-origin', redirect: 'error', cache: 'no-store',
@@ -336,11 +365,16 @@ window.__ModuleLoader__.load({
           if (apply) {
             setPatch(undefined)
             // A write without an `applied` list confirms nothing.
-            if (Array.isArray(value?.applied)) setApplied(value)
+            if (Array.isArray(value?.applied)) { setApplied(value); await controller.current?.load() }
             else setPatchReason('registration-unconfirmed')
             return
           }
-          if (value) setPatch(value)
+          if (value) {
+            setApplied(undefined)
+            setPatch(value)
+            if (value.unavailable) setPatchReason(value.reason ?? 'source-unavailable')
+          }
+          await controller.current?.load()
         } catch { setPatch(undefined); setPatchReason('source-unavailable') }
         finally { setPatchBusy(false) }
       }
@@ -390,7 +424,8 @@ window.__ModuleLoader__.load({
         loginUrl && h('p', { className: 'dsh-chatgpt-notice' },
           h('a', { className: 'dsh-chatgpt-link', href: loginUrl, target: '_blank', rel: 'noopener noreferrer' }, t('open'))),
         h('div', { className: 'dsh-chatgpt-actions', 'aria-busy': state.busy || patchBusy },
-          status?.patchAvailable && connected && !pending && button(t('patchPreview'), 'secondary', () => void inspectPatch()),
+          status?.patchAvailable && (connected || expired) && !pending && button(t('patchPreview'), 'secondary', () => void inspectPatch()),
+          status?.patchAvailable && !pending && button(t('patchRestore'), 'secondary', () => void inspectPatch(false, true)),
           pending ? button(t('cancel'), 'danger', () => void controller.current?.act('cancel'))
             : connected ? h('span', { className: 'dsh-chatgpt-push' }, button(t('logoutShort'), 'danger', () => void controller.current?.act('logout')))
               : button(t(stored ? 'relogin' : 'login'), 'primary', () => void controller.current?.act('login')),
@@ -398,26 +433,35 @@ window.__ModuleLoader__.load({
         state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')),
 
         patch && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
-          h('p', { className: 'dsh-chatgpt-preview-title' }, patch.unavailable ? t('patchFallback') : patch.added.length ? `${t('patchCount')} (${patch.added.length})` : t('patchEmpty')),
+          h('p', { className: 'dsh-chatgpt-preview-title' }, patch.unavailable ? t('patchFallback') : patch.kind === 'restore' ? t(patch.signature ? 'patchRestoreConfirm' : 'patchRestoreEmpty') : patch.added.length ? `${t('patchCount')} (${patch.added.length})` : t('patchEmpty')),
           !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-models' }, ...patch.added.map(id => h('span', { key: id, className: 'dsh-chatgpt-model' }, id))),
           h('p', { className: 'dsh-chatgpt-note' }, `${t('patchSelected')}: ${patch.current ?? patch.preserved.length} · ${t('patchPreserved')}: ${patch.preserved.length} · ${t('patchTotal')}: ${patch.total} · ${t('patchUnverified')}: ${patch.unsupported}`),
+          patch.kind === 'restore' && patch.signature && h('p', { className: 'dsh-chatgpt-note' }, t('patchRestoreWarning')),
+          patch.kind === 'restore' && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchResets')}: ${patch.resets?.join(', ') || '0'}`),
+          patch.kind === 'restore' && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchRemoved')}: ${patch.removed?.join(', ') || '0'}`),
+          patch.capabilityStatus && h('p', { className: 'dsh-chatgpt-note' }, t('patchCatalogOnly')),
           h('details', { className: 'dsh-chatgpt-details' }, h('summary', null, t('patchDetails')),
             h('p', { className: 'dsh-chatgpt-note' }, patch.preserved.join(', ')),
             h('p', { className: 'dsh-chatgpt-note' }, `${t('patchLimited')}: ${patch.limited?.map(item => `${item.id} (${item.omittedEfforts.join(', ')})`).join('; ') || '0'}`),
             h('p', { className: 'dsh-chatgpt-note' }, patch.source),
-            patch.fetchedAt !== undefined && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchSourceAt')} ${new Date(patch.fetchedAt).toLocaleString()}${patch.clientVersion ? ` · ${t('patchClient')} ${patch.clientVersion}` : ''}`),
+            patch.fetchedAt !== undefined && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchSourceAt')} ${new Date(patch.fetchedAt).toLocaleString()}${patch.clientVersion ? ` · ${t('patchClient')} ${patch.clientVersion}${patch.clientVersionSource ? ` (${patch.clientVersionSource})` : ''}` : ''}`),
             // The catalogue the write would leave behind, not just the additions.
             !patch.unavailable && patch.added.length > 0 && h('p', { className: 'dsh-chatgpt-note' }, `${t('patchWrites')}: ${[...patch.preserved, ...patch.added].join(', ')}`),
             // Kept models the listing does not carry: reported, never removed.
             patch.unlisted?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchUnlisted')}: ${patch.unlisted.join(', ')}`) : null,
-            // A declared capacity below what the source now allows is reported,
-            // never rewritten: the value may be the user's own choice.
+            // A declared capacity below the window the source reports is
+            // surfaced, never rewritten: the value may be the user's own choice.
             patch.understated?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchUnderstated')}: ${patch.understated.map(item => `${item.id} (${item.declared} → ${item.source})`).join('; ')}`) : null,
+            patch.overstated?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchOverstated')}: ${patch.overstated.map(item => `${item.id} (${item.declared} > ${item.source})`).join('; ')}`) : null,
+            patch.nativeAdded?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchNativeAdded')}: ${patch.nativeAdded.join(', ')}`) : null,
+            patch.inheritedOutputLimits?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchOutputDefaults')}: ${patch.inheritedOutputLimits.join(', ')}`) : null,
+            patch.windows?.length ? h('p', { className: 'dsh-chatgpt-note' }, `${t('patchWindows')}: ${patch.windows.map(item => `${item.id} (${item.contextWindow} / ${item.maxContextWindow ?? '—'})`).join('; ')}`) : null,
             patch.replacesCatalog && h('p', { className: 'dsh-chatgpt-note' }, t('patchHandover'))),
-          !patch.unavailable && patch.added.length > 0 && h('div', { className: 'dsh-chatgpt-actions' }, button(t('patchApply'), 'primary', () => void inspectPatch(true)))),
+          !patch.unavailable && (patch.added.length > 0 || (patch.kind === 'restore' && patch.signature)) && h('div', { className: 'dsh-chatgpt-actions' }, button(t(patch.kind === 'restore' ? 'patchRestoreConfirm' : 'patchApply'), 'primary', () => void inspectPatch(true)))),
 
         applied?.applied && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
-          h('p', { className: 'dsh-chatgpt-preview-title' }, `${t('patchApplied')} (${applied.applied.length})`),
+          h('p', { className: 'dsh-chatgpt-note' }, t('patchRegisteredOnly')),
+          h('p', { className: 'dsh-chatgpt-preview-title' }, applied.restored ? t('patchRestored') : `${t('patchApplied')} (${applied.applied.length})`),
           h('div', { className: 'dsh-chatgpt-models' }, ...applied.applied.map(id => h('span', { key: id, className: 'dsh-chatgpt-model' }, id))),
           h('p', { className: 'dsh-chatgpt-note' }, `${t('patchPreserved')}: ${applied.preserved.length} · ${t('patchRevision')}: ${applied.before?.revision ?? '-'} → ${applied.after?.revision ?? '-'}`),
           h('details', { className: 'dsh-chatgpt-details' }, h('summary', null, t('patchDetails')),

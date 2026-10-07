@@ -36,7 +36,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.8.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.9.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -52,13 +52,15 @@ dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.8.tgz
 
 ### 缺失模型补丁（预览后确认）
 
-已登录且宿主提供可写设置时，卡片上的「检查缺失模型」会以当前 OAuth 账号只读查询 Codex 模型目录，将可见、能力信息足够的条目与现有可选模型比较。预览无写入；仅在点击「确认补充缺失模型」后通过宿主设置服务写入。响应不向页面传输 OAuth 令牌；网络或模型来源不可用时**不使用旧 pi-ai catalog 猜测新增模型**，原配置保持不变。
+已有 OAuth 凭据且宿主提供可写设置时，卡片上的「检查缺失模型」会以当前账号查询 Codex 模型目录，将可见、能力信息足够的条目与现有可选模型比较。凭据即将过期时，复用宿主 pi-ai 的鉴权解析器，在同一个 DSH 凭据事务内刷新保存后重新读取；刷新失败显示具体原因。预览不写模型配置；仅在点击「确认补充缺失模型」后通过宿主设置服务写入。响应不向页面传输 OAuth 令牌；网络或模型来源不可用时**不使用旧 pi-ai catalog 猜测新增模型**，原配置保持不变。
 
-补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。写入后若要撤回，请先在宿主模型设置中检查并编辑显式模型列表；当前版本不提供自动回退。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。当前目录请求使用经本机检查的 Codex CLI `0.160.1` 作为 `client_version`；后续版本需要复核并更新该值。部分新模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露宿主认识的等级，并在预览中以「未支持推理等级」列出被省略的等级。
+补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。重复检查会并入新安装 pi-ai 中新增的原生模型 ID，但不覆盖已有自定义字段，目录不会后台自动同步。「检查恢复原生目录」会先列出被清除的显式能力配置及将不再可选的非原生模型；单独确认后将 `models` 设为空列表，恢复原生目录，其它路由设置不变。恢复不要求远端目录或 OAuth 可用；无法读取原生目录时拒绝恢复。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。`client_version` 优先使用 `DSH_CODEX_CLIENT_VERSION`（合法版本号），其次通过有界的 `codex --version` 探测本机 CLI，均不可用时采用内置 `0.160.1`；预览展示实际版本与来源。部分新模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露宿主认识的等级，并在预览中以「未支持推理等级」列出被省略的等级。
 
-上下文容量取**来源的 `max_context_window`**（账号可声明的上限），缺失时回退 `context_window`。原因是端点同时返回两者：`context_window`（如 272000）是长上下文**计费档位**的起点，不是可用上限；把它当作窗口会让宿主远早于账号能力触发压缩。已显式写入的 `contextWindow` 不会被改写，若低于来源可用值，预览会以「声明的上下文小于来源可用值」提示，由你决定是否调整。
+上下文容量取**来源的 `context_window`**（模型自身的窗口），缺失时回退 `max_context_window`。端点同时返回两者，而 `max_context_window` 的语义是**配置覆盖允许达到的上限**、不是模型窗口，因此只作回退；这与上游 Codex 自己的 `resolved_context_window()` 一致。已显式写入的 `contextWindow` 不会被改写，低于或高于来源默认窗口都会提示；详情分别展示默认窗口与最大配置覆盖上限，供你检查设置或恢复原生目录。来源提供 `max_output_tokens` 时映射输出上限，没有时提示继承宿主默认值。
 
-已实测：插件以 DSH 存储的 OAuth 凭据可读取账号目录（HTTP 200，10 条，其中 7 条能力信息完整），且 `gpt-6.1-sol` 已在该路由上完成实际推理。验证细节与剩余偏差见 [实施方案](docs/design-task-feature-codex-missing-model-patches.md)。
+写入后对注册进行有界确认，只重查状态、不重试写入；界面区分目录信息、注册确认与未经验证的实际推理能力。模型能力、账号或配置变化仍会使确认失效，仅远端或运行时目录排序变化不会产生冲突。
+
+此前已实测：插件以 DSH 存储的 OAuth 凭据可读取账号目录（HTTP 200，10 条，其中 7 条能力信息完整），且 `gpt-6.1-sol` 已在该路由上完成实际推理。验证细节与剩余偏差见 [实施方案](docs/design-task-feature-codex-missing-model-patches.md)。
 
 ## 网络
 
@@ -93,7 +95,7 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 ```
 
-后一条命令在末项为 **65 项全部通过**；不指定 `DSH_INSTALL_ROOT` 时其中 4 项跳过（61 通过）。
+`tests/host-catalog.test.ts` 还覆盖请求版本选择、刷新事务与并发避免重复旋转；`tests/installed-host-catalog.test.ts` 用真实 pi-ai 鉴权解析器验证同一个 DSH 凭据事务中的刷新行为，但使用替身令牌交换，不连接真实 OAuth endpoint。
 
 另有断言覆盖令牌不外泄：驱动全部管理路由并检查每个响应体与 index 注入脚本，OAuth access/refresh 与签名均不出现。
 

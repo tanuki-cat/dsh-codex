@@ -98,10 +98,13 @@ test('a patch accepted by the host schema registers through the real adapter and
       },
     }
 
+    const credentialContext = { credentials: { async readRecord() { return { kind: 'grant', payload: { type: 'oauth', access: 'test-access', refresh: 'test-refresh', accountId: 'account-1', expires: Date.now() + 3_600_000 } } } } }
+    const { loadHostCatalog } = await import('../lib/host-catalog.js')
     const patches = createModelPatches(
-      { credentials: { async readRecord() { return { kind: 'grant', payload: { access: 'test-access', refresh: 'test-refresh', accountId: 'account-1', expires: Date.now() + 60_000 } } } } },
+      credentialContext,
       { settings, llm: { listModels: provider => ctx.llm.listModels(provider) } },
       async () => new Response(JSON.stringify({ models: listing }), { status: 200 }),
+      { host: () => loadHostCatalog(credentialContext), clientVersion: async () => ({ value: '0.160.1', source: 'builtin' }) },
     )
 
     // Preview reads the real runtime listing and proposes only the missing,
@@ -118,7 +121,7 @@ test('a patch accepted by the host schema registers through the real adapter and
     const added = written.find(entry => entry.id === 'gpt-6.1-sol')
     assert.ok(added, 'the target was written')
     assert.equal(added.contextWindow, 272000)
-    assert.deepEqual(added.input, ['text', 'image'])
+    assert.deepEqual(added.input, ['image', 'text'])
     assert.equal(added.reasoningEfforts.ultra, undefined, 'levels the host cannot represent are omitted')
     assert.equal(added.reasoningEfforts.max, 'max')
     // Every catalog model survives, in order, ahead of the addition.
@@ -131,7 +134,7 @@ test('a patch accepted by the host schema registers through the real adapter and
     assert.equal(info.id, 'gpt-6.1-sol')
     // The real resolver reports the capability it resolved from the entry.
     assert.equal(info.context.contextWindow, 272000)
-    assert.deepEqual(info.inputModalities, ['text', 'image'])
+    assert.deepEqual(info.inputModalities, ['image', 'text'])
     // Negative control: the resolver is live, not a stub that answers anything.
     await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', 'ghost-model'),
       (error) => error.code === 'UNKNOWN_MODEL')
@@ -140,6 +143,14 @@ test('a patch accepted by the host schema registers through the real adapter and
     const second = await patches.preview()
     assert.deepEqual(second.added, [])
     assert.equal(writes.length, 1)
+
+    const restore = await patches.restorePreview()
+    assert.deepEqual(restore.removed, ['gpt-6.1-sol'])
+    assert.equal((await patches.restore(restore.signature)).restored, true)
+    assert.deepEqual((await ctx.llm.listModels('openai-codex')).map(model => model.id), MODELS)
+    assert.equal(live['openai-codex'].reasoning, 'medium')
+    assert.deepEqual(live['openai-codex'].models, [])
+    await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', 'gpt-6.1-sol'), error => error.code === 'UNKNOWN_MODEL')
   } finally {
     for (const fiber of fibers.reverse()) await fiber.dispose()
     hooks.deregister()
@@ -191,7 +202,7 @@ test('the host schema rejects sections it cannot express, and a refused write is
       },
     }
     const patches = createModelPatches(
-      { credentials: { async readRecord() { return { kind: 'grant', payload: { access: 'a', refresh: 'r', accountId: 'account-1', expires: Date.now() + 60_000 } } } } },
+      { credentials: { async readRecord() { return { kind: 'grant', payload: { access: 'a', refresh: 'r', accountId: 'account-1', expires: Date.now() + 3_600_000 } } } } },
       { settings, llm: { listModels: provider => ctx.llm.listModels(provider) } },
       async () => new Response(JSON.stringify({ models: [remoteModel('gpt-6.1-sol')] }), { status: 200 }),
     )

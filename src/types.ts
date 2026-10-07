@@ -6,7 +6,7 @@ import type { PatchServices } from './model-patches.js'
 
 export interface CodexContext {
   authorization: Pick<AuthorizationService, 'describe' | 'begin' | 'cancel'>
-  credentials: Pick<CredentialProvider, 'readRecord' | 'deleteRecord'>
+  credentials: Pick<CredentialProvider, 'readRecord' | 'deleteRecord'> & Partial<Pick<CredentialProvider, 'modifyRecord'>>
 }
 
 export interface WebContext {

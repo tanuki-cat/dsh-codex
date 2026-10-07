@@ -17,6 +17,7 @@ export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
 /** The reason code a refusal carries, or the generic one when it carries none. */
 function reasonOf(error: unknown): PatchReason {
+  if (error instanceof Error && error.name === 'SettingsConflictError') return 'conflict'
   const reason = error instanceof Error && 'reason' in error ? (error as { reason?: unknown }).reason : undefined
   return typeof reason === 'string' ? reason as PatchReason : 'source-unavailable'
 }
@@ -195,11 +196,16 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
         catch { reply(503, refusal(reason, detail)); return }
       }
     }
-    if (operation === '/models-apply' && req.method === 'POST') {
+    if (operation === '/models-restore-preview' && req.method === 'GET') {
+      if (!patch) { reply(503, refusal('settings-unavailable')); return }
+      try { reply(200, await patch.restorePreview()); return }
+      catch (error) { reply(400, refusal(reasonOf(error))); return }
+    }
+    if ((operation === '/models-apply' || operation === '/models-restore') && req.method === 'POST') {
       if (!patch) { reply(503, refusal('settings-unavailable')); return }
       const signature = req.headers['x-dsh-model-patch']
       if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) { reply(400, refusal('conflict')); return }
-      try { reply(200, await patch.apply(signature)); return }
+      try { reply(200, operation === '/models-restore' ? await patch.restore(signature) : await patch.apply(signature)); return }
       catch (error) {
         const reason = reasonOf(error)
         // A stale confirmation is the caller's to redo; every other refusal is

@@ -152,18 +152,20 @@ function controls(tree) {
 }
 
 /** Answers the management API the way the host route does. */
-function host({ status, fail = [], preview, apply, refusal } = {}) {
+function host({ status, fail = [], preview, apply, restorePreview, restore, refusal } = {}) {
   const calls = []
+  const headers = []
   return {
-    calls,
+    calls, headers,
     async fetch(url, init) {
+      headers.push(init.headers)
       const operation = url.split('/').at(-1)
       calls.push(operation)
       if (fail.includes(operation)) throw new Error('offline')
       assert.equal(init.headers['x-dsh-chatgpt-token'], 'codex-capability')
       // A refusal carries a reason code with a non-2xx status, which is what
       // lets the card name the remedy rather than the source.
-      const body = operation === 'models-apply' ? apply : operation === 'models-preview' ? preview : status
+      const body = operation === 'models-restore' ? restore : operation === 'models-restore-preview' ? restorePreview : operation === 'models-apply' ? apply : operation === 'models-preview' ? preview : status
       if (refusal && operation.startsWith('models-')) {
         return { ok: false, status: refusal.status, async json() { return { error: 'refused', reason: refusal.reason } } }
       }
@@ -506,7 +508,7 @@ test('model patch requires preview before a separate confirmation', async () => 
   await settled()
   assert.ok(controls(page.tree).includes('检查缺失模型'))
   const actions = elements(page.tree).find(el => el.props.className === 'dsh-chatgpt-actions')
-  assert.deepEqual(controls(actions), ['检查缺失模型', '退出登录'])
+  assert.deepEqual(controls(actions), ['检查缺失模型', '检查恢复原生目录', '退出登录'])
   const logout = elements(actions).find(el => el.type === 'button' && text(el) === '退出登录')
   assert.equal(logout.props.title, '退出登录并删除本地凭据')
   assert.equal(elements(actions).find(el => el.type === 'button' && text(el) === '检查缺失模型').props['data-variant'], 'secondary')
@@ -518,14 +520,14 @@ test('model patch requires preview before a separate confirmation', async () => 
   assert.ok(elements(page.tree).some(el => el.props.className === 'dsh-chatgpt-model' && text(el) === 'gpt-6.1-sol'))
   elements(page.tree).find(el => el.type === 'button' && text(el) === '确认补充缺失模型').props.onClick()
   await settled()
-  assert.deepEqual(api.calls, ['status', 'models-preview', 'models-apply'])
+  assert.deepEqual(api.calls, ['status', 'models-preview', 'status', 'models-apply'])
 })
 
 test('the preview names the source, its age and the catalogue the write would leave', async () => {
   const fetchedAt = Date.UTC(2026, 9, 7, 1, 39)
   const api = host({ status: { ...connected, patchAvailable: true }, preview: {
     added: ['gpt-6.1-sol'], preserved: ['gpt-6-sol'], total: 10, unsupported: 0, current: 1,
-    alreadySelectable: ['gpt-6-sol'], unlisted: ['legacy-model'], understated: [{ id: 'gpt-6-sol', declared: 272000, source: 872000 }],
+    alreadySelectable: ['gpt-6-sol'], unlisted: ['legacy-model'], understated: [{ id: 'gpt-6-sol', declared: 128000, source: 272000 }],
     replacesCatalog: true, clientVersion: '0.160.1', fetchedAt,
     source: 'https://chatgpt.com/backend-api/codex/models', signature: 'a'.repeat(64),
   } })
@@ -544,9 +546,9 @@ test('the preview names the source, its age and the catalogue the write would le
   assert.ok(notes.some(line => line.includes('接管整个目录')), JSON.stringify(notes))
   // A kept model the listing omits is named rather than silently dropped.
   assert.ok(notes.some(line => line.includes('来源未收录') && line.includes('legacy-model')), JSON.stringify(notes))
-  // A declared capacity below the source maximum is shown as a pair, so the
-  // gap is visible without the patch rewriting the user's own value.
-  assert.ok(notes.some(line => line.includes('声明的上下文小于来源可用值') && line.includes('gpt-6-sol (272000 → 872000)')), JSON.stringify(notes))
+  // A declared capacity below the source value is shown as a pair, so the gap
+  // is visible without the patch rewriting the user's own value.
+  assert.ok(notes.some(line => line.includes('声明的上下文小于来源给出的窗口') && line.includes('gpt-6-sol (128000 → 272000)')), JSON.stringify(notes))
 })
 
 test('an applied patch reports what it added and the revisions it moved between', async () => {
@@ -591,4 +593,60 @@ test('each refusal reason renders its own remedy instead of a generic failure', 
     const alerts = elements(page.tree).filter(el => el.props.role === 'alert').map(text)
     assert.ok(alerts.some(line => line.includes(expected)), reason + ' -> ' + JSON.stringify(alerts))
   }
+})
+
+test('HTTP 200 fallback renders its specific remedy and never offers confirmation', async () => {
+  for (const [reason, expected] of [['route-missing', '尚未声明'], ['settings-read-only', '只读'], ['credential-expired', '凭据已过期'], ['source-unavailable', '无法获取']]) {
+    const api = host({ status: { ...connected, patchAvailable: true }, preview: {
+      unavailable: 'remote unavailable', reason, added: [], preserved: ['old'], total: 1, unsupported: 0, signature: '', source: 'fallback',
+    } })
+    const page = browser({ environment: api }).mount()
+    await settled()
+    elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+    await settled()
+    assert.ok(elements(page.tree).some(el => el.props.role === 'alert' && text(el).includes(expected)))
+    assert.ok(text(page.tree).includes('以下仅为本机目录'))
+    assert.ok(!controls(page.tree).includes('确认补充缺失模型'))
+  }
+})
+
+test('expired credentials retain the catalog check entry for automatic refresh', async () => {
+  const api = host({ status: { ...connected, connected: false, credentialState: 'expired', patchAvailable: true } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  assert.ok(controls(page.tree).includes('检查缺失模型'))
+  assert.ok(controls(page.tree).includes('重新登录'))
+})
+
+test('restoration previews destructive effects before a separate signed confirmation', async () => {
+  const preview = { kind: 'restore', added: [], preserved: ['native'], removed: ['custom'], resets: ['native', 'custom'], total: 1, unsupported: 0, signature: 'b'.repeat(64), source: 'installed pi-ai' }
+  const api = host({ status: { ...connected, patchAvailable: true }, restorePreview: preview, restore: { ...preview, signature: '', applied: [], restored: true, after: { models: ['native'] } } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  assert.ok(!controls(page.tree).includes('确认恢复原生目录'))
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '检查恢复原生目录').props.onClick()
+  await settled()
+  assert.ok(text(page.tree).includes('显式能力配置将被移除'))
+  assert.ok(text(page.tree).includes('将不再可选: custom'))
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '确认恢复原生目录').props.onClick()
+  await settled()
+  assert.deepEqual(api.calls, ['status', 'models-restore-preview', 'status', 'models-restore', 'status'])
+  assert.equal(api.headers[3]['x-dsh-model-patch'], 'b'.repeat(64))
+  assert.ok(text(page.tree).includes('已恢复原生目录'))
+  assert.ok(text(page.tree).includes('未执行推理'))
+  assert.ok(!controls(page.tree).includes('确认恢复原生目录'))
+})
+
+test('metadata previews expose capability limits and distinguish context from override maximum', async () => {
+  const api = host({ status: { ...connected, patchAvailable: true }, preview: {
+    added: ['new'], preserved: [], total: 1, unsupported: 0, signature: 'a'.repeat(64), source: 'remote',
+    capabilityStatus: 'catalog-only', inheritedOutputLimits: ['new'], windows: [{ id: 'new', contextWindow: 272000, maxContextWindow: 872000 }],
+  } })
+  const page = browser({ environment: api }).mount()
+  await settled()
+  elements(page.tree).find(el => el.type === 'button' && text(el) === '检查缺失模型').props.onClick()
+  await settled()
+  assert.ok(text(page.tree).includes('尚未验证实际推理'))
+  assert.ok(text(page.tree).includes('未提供输出上限'))
+  assert.ok(text(page.tree).includes('new (272000 / 872000)'))
 })
