@@ -1,7 +1,7 @@
 # 从插件内点击完成 openai-codex 登录与路由声明
 
-> 状态：待实施。本文记录已验证的宿主机制、未验证的风险点，以及分阶段实施方案。
-> 前置：官方 `openai-codex` 路由已在本机跑通（OAuth 授权、真实推理 HTTP 200、轮内缓存命中 97.5%）。当前需手工执行 `scripts/login-openai-codex.mjs` 与 `scripts/add-openai-codex-route.mjs`。
+> 状态：历史方案及实施记录。阶段一在 0.2.6/0.2.7 完成，0.3.0 删除旧 provider；阶段二（插件代写路由）未实施，由宿主 Models 页的 `addCatalog` 替代。当前使用见 [README](<../README.md>)，0.3.9 模型补丁行为见[处理记录](<design-task-fix-codex-model-patch-review-0.3.9.md>)。
+> 版本归属：下文保留原方案、历史文件路径和对应版本的验证结果，不作为当前操作说明。此前的手工登录前置条件已由设置页入口替代；当前排障脚本为 TypeScript，见 [README 的辅助脚本说明](<../README.md#辅助脚本>)。
 
 ## 目标
 

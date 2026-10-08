@@ -1,5 +1,7 @@
 # ChatGPT 订阅接入 DSH
 
+> 版本归属：本文记录 0.2.x 自建 `chatgpt-plan` provider 的历史实现及排障过程。该 provider 已在 0.3.0 移除，旧配置、文件路径和验证记录不作为当前安装说明。当前入口与能力边界见 [README](<../README.md>)，0.3.9 模型补丁处理结果见[后续记录](<design-task-fix-codex-model-patch-review-0.3.9.md>)。
+
 ## 模型目录与思考强度
 
 本机已登录账户的 DSH 模型选择器展示五个账户目录模型，缺少 gpt-6.1-sol；现有适配器只转发 `GET /v1/models` 中 `visibility=list` 的条目，且 `resolveModel()` 未提供 `reasoning` 元数据，因此 DSH 没有思考强度选项。官方说明该 endpoint 是账户模型目录；公开模型文档列出 gpt-6.1-sol 及其 reasoning.effort，但公开文档不证明该账户已获授权。
