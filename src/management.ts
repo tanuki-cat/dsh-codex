@@ -12,6 +12,7 @@ import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin
 import type { IncomingMessage } from 'node:http'
 import type { CodexContext, ManagementState, WebContext } from './types.js'
 import type { PatchReason, createModelPatches } from './model-patches.js'
+import type { createUsageService } from './usage.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
@@ -43,7 +44,7 @@ function refusal(reason: PatchReason, message?: string) {
  * @param ctx - the plugin context carrying the authorization and credential seams.
  * @returns the codex operations the management route exposes.
  */
-export function createCodexManagement(ctx: CodexContext) {
+export function createCodexManagement(ctx: CodexContext, invalidateUsage: (paused?: boolean) => void = () => {}) {
   let current: ManagementState = { state: 'idle' }
   let active: { controller: AbortController; job?: Promise<void> } | undefined
   let closed = false
@@ -74,6 +75,7 @@ export function createCodexManagement(ctx: CodexContext) {
     if (active !== undefined || ctx.authorization.describe(CODEX_KEY)?.inFlight) {
       throw new Error('An OpenAI sign-in is already running.')
     }
+    invalidateUsage(true)
     const controller = new AbortController()
     const attempt: { controller: AbortController; job?: Promise<void> } = { controller }
     active = attempt
@@ -92,7 +94,7 @@ export function createCodexManagement(ctx: CodexContext) {
     }, error => {
       if (active !== attempt) return
       current = { state: 'failed', notice: undefined, error: publicError(error) }
-    }).finally(() => { if (active === attempt) active = undefined })
+    }).finally(() => { if (active === attempt) { active = undefined; invalidateUsage() } })
     // The attempt owns its own failures; an unobserved rejection here would
     // otherwise surface as an unhandled one.
     attempt.job.catch(() => {})
@@ -108,10 +110,13 @@ export function createCodexManagement(ctx: CodexContext) {
   return {
     status, start, cancel,
     async signOut() {
-      await cancel()
-      await forgetCodexLogin(ctx)
-      current = { state: 'idle', notice: undefined, error: undefined }
-      return status()
+      invalidateUsage(true)
+      try {
+        await cancel()
+        await forgetCodexLogin(ctx)
+        current = { state: 'idle', notice: undefined, error: undefined }
+        return status()
+      } finally { invalidateUsage(false) }
     },
     async dispose() { closed = true; await cancel() },
   }
@@ -162,7 +167,7 @@ export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, 
  * @param manager - the codex management state machine.
  * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.
  */
-export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typeof createCodexManagement>, patches?: () => ReturnType<typeof createModelPatches> | undefined) {
+export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typeof createCodexManagement>, patches?: () => ReturnType<typeof createModelPatches> | undefined, usage?: ReturnType<typeof createUsageService>) {
   const token = randomBytes(32).toString('hex')
   const path = `/chatgpt-management/${CODEX_PROVIDER}`
   ctx.on('webserver/index-inject', table => {
@@ -182,6 +187,11 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
     const reply = (code: number, value: unknown) => { res.writeHead(code); res.end(JSON.stringify(value)) }
     if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
     const operation = new URL(req.url ?? '/', 'http://127.0.0.1').pathname.slice(path.length)
+    if (operation === '/usage' && req.method === 'GET') {
+      if (!usage) { reply(503, { error: 'Usage service unavailable.' }); return }
+      try { reply(200, await usage.get()) } catch { reply(503, { error: 'Usage service unavailable.' }) }
+      return
+    }
     const route = routes[operation]
     const patch = patches?.()
     if (operation === '/models-preview' && req.method === 'GET') {
@@ -221,5 +231,5 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
       reply(400, { error: 'ChatGPT operation failed. Check your connection and account permissions, then retry.' })
     }
   } })
-  ctx.effect(() => () => { dispose(); return manager.dispose() }, 'codex management routes')
+  ctx.effect(() => () => { dispose(); usage?.dispose(); return manager.dispose() }, 'codex management routes')
 }

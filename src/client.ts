@@ -9,6 +9,8 @@
  * DSH loads the compiled IIFE as a factory; React comes from the host.
  */
 import type * as React from 'react'
+import { createUsageController, createUsageView, usageCss, usageDictionaries } from './client-usage.js'
+import type { ModelStore, UsageController } from './client-usage.js'
 
 type ManagementStatus = {
   state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
@@ -68,7 +70,13 @@ type Environment = {
   removeEventListener?: (name: string, callback: () => void) => void
 }
 type CardProps = { provider?: { provider: string }; t: (key: string) => string }
+type UsageContext = ClientContext & {
+  modelDirectories: { directoryFor(id: string): { store: ModelStore; load(): Promise<unknown> } }
+  sessions: { subagentAddress(id: string): unknown }
+  connection: { isLoopback: boolean }
+}
 type ClientContext = {
+  inject?(services: string[], callback: (ctx: UsageContext) => void): void
   effect(factory: () => () => void, label: string): void
   locale: { register(namespace: string, dictionaries: Record<string, Record<string, string>>): () => void; bind(namespace: string): (key: string) => string }
   slots: { inject(name: string, callback: () => void): void; register(entry: { name: string; key: string; locale: string; inject: () => { t: (key: string) => string } }, view: (props: CardProps) => React.ReactNode): void }
@@ -84,6 +92,9 @@ window.__ModuleLoader__.load({
     const { createElement: h, useEffect, useState } = React
     const NS = 'chatgptManagement'
     const STYLE_ID = 'dsh-llm-chatgpt/ChatgptCodex.css'
+    const usageControllers = new Set<UsageController>()
+    let usagePaused = false
+    const invalidateUsage = (paused = false) => { usagePaused = paused; for (const controller of usageControllers) controller.setPaused(paused) }
     // The one route this card signs into. Its flow is registered by the host;
     // the card is one button over that flow and owns no credential itself.
     const CODEX_ROUTE = 'openai-codex'
@@ -136,7 +147,7 @@ window.__ModuleLoader__.load({
       const tag = document.createElement('style')
       tag.dataset.plugin = 'dsh-llm-chatgpt'
       tag.dataset.pluginCss = STYLE_ID
-      tag.textContent = css
+      tag.textContent = css + usageCss
       document.head.appendChild(tag)
       return () => tag.remove()
     }
@@ -238,6 +249,7 @@ window.__ModuleLoader__.load({
       }
       const accept = (status: ManagementStatus, expected = sequence) => {
         if (disposed || expected !== sequence) return
+        if (snapshot.status?.state === 'pending' && status?.state !== 'pending') invalidateUsage()
         pollFailures = 0
         publish({ loading: false, busy: false, status, error: false })
         if (popup && status?.notice?.url && popupUrl !== status.notice.url) {
@@ -274,6 +286,7 @@ window.__ModuleLoader__.load({
         subscribe(listener: (state: Snapshot) => void) { listeners.add(listener); return () => listeners.delete(listener) },
         load,
         async act(operation: 'login' | 'cancel' | 'logout') {
+          invalidateUsage(true)
           const expected = ++sequence
           stopPolling()
           // Open synchronously in the user's click stack to avoid popup blockers.
@@ -283,11 +296,12 @@ window.__ModuleLoader__.load({
             if (popup) popup.opener = null
           }
           publish({ busy: true, error: false })
-          try { accept(await request(operation, 'POST'), expected) }
+          try { accept(await request(operation, 'POST'), expected); if (expected === sequence) invalidateUsage(snapshot.status?.state === 'pending') }
           catch {
             if (expected !== sequence) return
             popup?.close(); popup = undefined; popupUrl = undefined
             publish({ busy: false, error: true })
+            invalidateUsage()
           }
         },
         dispose() {
@@ -482,6 +496,32 @@ window.__ModuleLoader__.load({
         name: 'settings.models.provider-card', key: 'llm-pi-ai',
         locale: NS, inject: () => ({ t }),
       }, CodexCard))
+      ctx.inject?.(['modelDirectories', 'sessions', 'connection'], scope => {
+        const connection = globalThis.__DSH_CHATGPT_MANAGEMENT__?.[CODEX_ROUTE]
+        if (!connection || !scope.connection.isLoopback) return
+        const controller = createUsageController(connection)
+        controller.setPaused(usagePaused)
+        const usageNS = 'codexUsage'
+        scope.effect(() => {
+          usageControllers.add(controller)
+          return () => { usageControllers.delete(controller); controller.dispose() }
+        }, 'codex usage controller')
+        scope.effect(() => scope.locale.register(usageNS, usageDictionaries), 'codex usage translations')
+        const UsageSeat = createUsageView(React, controller)
+        const slots = scope.slots as unknown as {
+          inject(name: string, fn: () => void): void
+          register(entry: { name: 'conversation.input.right'; id: string; locale: string; inject(id: string): object }, view: typeof UsageSeat): void
+        }
+        slots.inject('conversation.input.right', () => slots.register({
+          name: 'conversation.input.right', id: 'codex-five-hour-usage', locale: usageNS,
+          inject(id) {
+            const directory = scope.modelDirectories.directoryFor(id)
+            const available = scope.sessions.subagentAddress(id) === undefined
+            return { directory: directory.store, available, t: scope.locale.bind(usageNS),
+              load: () => { if (available) directory.load().catch(() => {}) } }
+          },
+        }, UsageSeat))
+      })
     }
     return { name: 'chatgpt-signin', inject: ['slots', 'locale'], apply, createController }
   },

@@ -2,6 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
+import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /**
  * Browser double: a stylesheet sink, a hook runtime that repaints on every
@@ -181,6 +184,63 @@ const connected = {
 
 /** Let the mounted card settle its initial status request. */
 const settled = () => new Promise(resolve => setImmediate(resolve))
+
+test('usage is an optional independent right-slot contribution with session-local model data', () => {
+  const { module } = browser()
+  for (const loopback of [true, false]) {
+    const seats = new Map(), dictionaries = new Map(), cleanups = []; let loaded = 0
+    const store = { getSnapshot: () => ({ current: { provider: 'openai-codex' } }), subscribe: () => () => {} }
+    const ctx = {
+      connection: { isLoopback: loopback }, sessions: { subagentAddress: id => id === 'child' ? {} : undefined },
+      modelDirectories: { directoryFor: () => ({ store, load: async () => { loaded++ } }) },
+      effect(fn) { cleanups.push(fn()) },
+      locale: { register(ns, dict) { dictionaries.set(ns, dict); return () => dictionaries.delete(ns) }, bind(ns) { return key => dictionaries.get(ns).zh[key] } },
+      slots: { inject(_name, fn) { fn() }, register(entry, component) { if (entry.name === 'conversation.input.right') assert.equal(typeof entry.id, 'string'); seats.set(entry.name, { entry, component }) } },
+      inject(services, fn) { assert.deepEqual([...services], ['modelDirectories', 'sessions', 'connection']); fn(ctx) },
+    }
+    module.apply(ctx)
+    assert.ok(seats.has('settings.models.provider-card'))
+    const usage = seats.get('conversation.input.right')
+    assert.equal(Boolean(usage), loopback)
+    if (usage) {
+      assert.equal(usage.entry.id, 'codex-five-hour-usage'); assert.equal(usage.entry.key, undefined)
+      const props = usage.entry.inject('parent'); assert.equal(props.directory, store); assert.equal(props.available, true)
+      assert.equal(props.t('used'), '已用'); props.load(); assert.equal(loaded, 1)
+      const child = usage.entry.inject('child'); assert.equal(child.available, false); child.load(); assert.equal(loaded, 1)
+    }
+    for (const dispose of cleanups.reverse()) dispose()
+  }
+})
+
+test('quota list contribution registers and coexists in the real installed Host SlotCore', {
+  skip: process.env.DSH_INSTALL_ROOT ? false : 'Set DSH_INSTALL_ROOT to test the installed slot registry.',
+}, async t => {
+  const require = createRequire(resolve(process.env.DSH_INSTALL_ROOT, 'package.json'))
+  const { SlotCore } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-client-ui-slots')).href)
+  const core = new SlotCore(), cleanups = []
+  t.after(() => { for (const cleanup of cleanups.reverse()) cleanup() })
+  cleanups.push(core.register({ name: 'root', children: {
+    'conversation.input.right': { kind: 'list', scope: 'session' },
+    'settings.models.provider-card': { kind: 'keyed', scope: 'root' },
+  } }, () => null))
+  cleanups.push(core.register({ name: 'conversation.input.right', id: 'existing-contribution' }, () => null))
+  assert.throws(() => core.register({ name: 'conversation.input.right', key: 'wrong-key' }, () => null), /requires options.id/)
+  const store = { getSnapshot: () => ({ current: { provider: 'openai-codex' } }), subscribe: () => () => {} }
+  const ctx = {
+    connection: { isLoopback: true }, sessions: { subagentAddress: () => undefined },
+    modelDirectories: { directoryFor: () => ({ store, load: async () => {} }) },
+    effect(fn) { cleanups.push(fn()) },
+    locale: { register() { return () => {} }, bind() { return key => key } },
+    slots: { inject(_name, fn) { fn() }, register(entry, component) { const dispose = core.register(entry, component); cleanups.push(dispose); return dispose } },
+    inject(_services, fn) { fn(ctx) },
+  }
+  browser().module.apply(ctx)
+  const entries = core.entriesOfSlot('conversation.input.right')
+  assert.deepEqual(entries.map(entry => entry.options.id), ['existing-contribution', 'codex-five-hour-usage'])
+  const usage = entries.find(entry => entry.options.id === 'codex-five-hour-usage')
+  assert.equal(usage.inject('parent').directory, store)
+  assert.equal(core.entriesOfSlot('settings.models.provider-card')[0].options.key, 'llm-pi-ai')
+})
 
 test('the card is seated on the llm-pi-ai family and registers bilingual copy', () => {
   const page = browser().mount()

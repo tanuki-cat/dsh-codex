@@ -8,7 +8,7 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 但 pi-ai 的 provider 登录注册到 DSH 授权服务后，**宿主没有任何界面调用它**：模型设置页的 `settings.models.sign-in` 槽位属于 DeepSeek 账号，`settings.models.provider-card` 槽位没有注册者。结果是官方路由只能靠外部脚本登录。
 
-本插件补上这个缺口，且**不实现任何协议**——它是一层界面：
+本插件提供设置页登录与额度展示，**不另实现 OAuth 或推理协议**：
 
 - 在模型设置页的 `openai-codex` provider 卡片上渲染登录按钮；
 - 点击后驱动 pi-ai 自己的 OAuth 流程；
@@ -23,6 +23,18 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 ## 安装
 
+### 使用发布安装包
+
+从 [v0.3.10 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.10>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.10/dsh-llm-chatgpt-0.3.10.tgz>)，在下载目录执行：
+
+```sh
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.10.tgz
+```
+
+该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。功能源码已在 `0.3.10-dev.4` 上完成真实 profile 和原 GUI 验收；正式安装包另做类型检查、构建、测试和入口 smoke。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+
+### 从源码安装
+
 本机 `web` profile 可在普通终端执行安装脚本：
 
 ```sh
@@ -36,7 +48,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.9.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.10.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -79,11 +91,23 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 `scripts/login-openai-codex.ts` 和 `scripts/add-openai-codex-route.ts` 是为没有设置页入口的旧版环境保留的手工排障工具，当前安装流程不会调用。正常使用优先通过模型设置页登录并用「从目录添加」声明路由。
 
-## 首版限制
+## Codex 5 小时额度条
+
+选择 `openai-codex` 时，输入栏模型选择器左侧展示账号共享的 5 小时额度使用条和已用百分比。悬浮或键盘聚焦可查看剩余百分比、重置时间、最后更新时间和查询状态；点击可再次检查，但受刷新间隔限制。
+
+- 额度来自官方 Codex 客户端使用的 usage 接口，不按本会话 token 数估算；5 小时剩余不保证周额度、模型权限或其他限制仍可用。
+- 服务端复用 DSH 存储的登录凭据，不向页面传递 OAuth token。成功查询缓存 60 秒，多会话请求合并；账号变化或退出登录会清除旧额度。
+- 页面隐藏或离线时暂停轮询。网络暂时失败可展示同账号旧数据，最多五分钟且不跨重置时间；旧数据带标记。未知、未登录或不支持的窗口显示 `—`，不伪装成 0%。
+- 首版仅在 loopback Web Host 的普通会话显示；远端 subagent 和无法确认路由的会话隐藏。不支持额度槽位的旧宿主仍保留设置页登录。
+- 该后端接口不是稳定公开 API；字段或权限改变时降级为未知额度，不影响发送消息。
+
+实现方案和验证边界见 [额度条方案](<docs/design-task-feature-codex-five-hour-usage-bar.md>)。本功能属于 `0.3.10`，通过 GitHub Release 提供安装包，未发布到 npm。发布边界见 [0.3.10 发布说明](<docs/design-task-release-codex-five-hour-usage-0.3.10.md>)。
+
+## 当前限制
 
 - 不实现模型推理协议；图片输入、WebSocket 传输等仍由官方 pi-ai 实现。
 - 只在预览并确认后补充缺失模型，不提供通用模型编辑，也不自动修改默认模型。
-- 账户信息来自凭据中的 JWT 声明（名称、plan、到期时间），不请求额外接口。
+- 设置页账户信息来自凭据中的 JWT 声明（名称、plan、到期时间）；额度条单独请求 usage 接口，凭据到期时间不是额度重置时间。
 
 ## 验证范围
 

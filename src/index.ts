@@ -14,6 +14,7 @@
  */
 import { createCodexManagement, registerCodexManagement } from './management.js'
 import { createModelPatches } from './model-patches.js'
+import { createUsageService } from './usage.js'
 import type { PluginContext } from './types.js'
 
 export const name = 'llm-chatgpt'
@@ -26,6 +27,7 @@ export function apply(ctx: PluginContext) {
   let patches: ReturnType<typeof createModelPatches> | undefined
   ctx.inject(['settings', 'llm'], services => { patches = createModelPatches(ctx, services) })
   ctx.inject(['webServer', 'webRuntime'], web => {
-    registerCodexManagement(web, createCodexManagement(ctx), () => patches)
+    const usage = createUsageService(ctx)
+    registerCodexManagement(web, createCodexManagement(ctx, paused => usage.setPaused(paused ?? false)), () => patches, usage)
   })
 }
