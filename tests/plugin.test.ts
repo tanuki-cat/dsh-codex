@@ -31,6 +31,7 @@ function context({ flow = true } = {}) {
       },
     },
     inject(dependencies, callback) {
+      if (dependencies[0] === 'commands') return
       if (dependencies[0] === 'settings') {
         assert.deepEqual(dependencies, ['settings', 'llm'])
         return
@@ -64,4 +65,23 @@ test('plugin registers management independently of authorization flow order', ()
   // to mount after this plugin without requiring a remount.
   assert.equal(host.routes.size, 1)
   assert.ok(host.routes.has('/chatgpt-management/openai-codex'))
+})
+
+test('optional command shares parent service and survives web scope disposal', async t => {
+  const parentCleanups = [], webCleanups = []; let definition
+  const ctx = { credentials: { async readRecord() { return undefined } }, authorization: { cancel() {}, describe() { return undefined } },
+    effect(fn) { parentCleanups.push(fn()) },
+    inject(dependencies, callback) {
+      if (dependencies[0] === 'settings') return
+      if (dependencies[0] === 'commands') { callback({ commands: { register(value) { definition = value; return () => {} } } }); return }
+      callback({ webServer: { register() { return () => {} } }, webRuntime: { trustedHosts: [] }, on() {}, effect(fn) { webCleanups.push(fn()) } })
+    } }
+  apply(ctx)
+  t.after(async () => { for (const cleanup of webCleanups) await cleanup(); for (const cleanup of parentCleanups) await cleanup() })
+  assert.equal(definition.name, 'usage')
+  const args = { rawInput: '', signal: new AbortController().signal }
+  await webCleanups[0]()
+  assert.match((await definition.handler(args)).text, /未登录/)
+  await parentCleanups[0]()
+  assert.match((await definition.handler(args)).text, /额度服务不可用/)
 })

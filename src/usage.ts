@@ -2,18 +2,17 @@ import { createHash, randomUUID } from 'node:crypto'
 import { CODEX_KEY } from './codex.js'
 import { loadHostCatalog } from './host-catalog.js'
 import type { CodexContext } from './types.js'
+import { USAGE_POLL_INTERVAL, USAGE_MANUAL_INTERVAL, visibleUsageData } from './usage-policy.js'
+import type { UsageData, UsageWindow, WindowReason } from './usage-policy.js'
+export type { UsageData, UsageWindow, WindowReason } from './usage-policy.js'
 
 export type UsageReason = 'sign-in-required' | 'credential-incomplete' | 'credential-expired'
   | 'refresh-unavailable' | 'refresh-failed' | 'permission-denied' | 'rate-limited'
   | 'network-error' | 'timeout' | 'invalid-response' | 'no-five-hour-window'
   | 'account-changed' | 'service-unavailable'
-export interface UsageData {
-  usedPercent: number; remainingPercent: number; windowSeconds: 18000
-  resetsAt?: number; fetchedAt: number; usageAllowed?: boolean
-}
 export interface UsageReply {
   state: 'ready' | 'stale' | 'unavailable'; accountScope?: string
-  data?: UsageData; reason?: UsageReason; nextCheckAt: number
+  data?: UsageData; reason?: UsageReason; nextCheckAt: number; fromCache?: boolean
 }
 export class UsageError extends Error {
   constructor(public readonly reason: UsageReason, public readonly retryAfter?: number) { super(reason) }
@@ -23,25 +22,28 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 export function parseUsage(value: unknown, now: number, accountId: string): UsageData {
   if (!object(value)) throw new UsageError('invalid-response')
   if (value.account_id !== undefined && value.account_id !== accountId) throw new UsageError('account-changed')
-  if (value.rate_limit === null || value.rate_limit === undefined) throw new UsageError('no-five-hour-window')
-  if (!object(value.rate_limit)) throw new UsageError('invalid-response')
-  const limit = value.rate_limit
+  if (value.rate_limit != null && !object(value.rate_limit)) throw new UsageError('invalid-response')
+  const limit = object(value.rate_limit) ? value.rate_limit : {}
   const windows = [limit.primary_window, limit.secondary_window].filter(v => v != null)
   if (windows.some(w => !object(w) || !finite(w.limit_window_seconds) || w.limit_window_seconds <= 0)) throw new UsageError('invalid-response')
-  const matches = windows.filter(w => object(w) && w.limit_window_seconds === 18000) as Record<string, unknown>[]
-  if (!matches.length) throw new UsageError('no-five-hour-window')
-  if (matches.length !== 1) throw new UsageError('invalid-response')
-  const w = matches[0], used = w.used_percent
-  if (!finite(used) || used < 0 || used > 100) throw new UsageError('invalid-response')
-  let resetsAt: number | undefined
-  if (w.reset_at != null) {
-    if (!finite(w.reset_at) || !Number.isSafeInteger(w.reset_at) || w.reset_at <= 0 || w.reset_at * 1000 > 8.64e15) throw new UsageError('invalid-response')
-    resetsAt = w.reset_at * 1000
-    if (resetsAt <= now) throw new UsageError('invalid-response')
-  }
   for (const key of ['allowed', 'limit_reached']) if (limit[key] !== undefined && typeof limit[key] !== 'boolean') throw new UsageError('invalid-response')
-  return { usedPercent: used, remainingPercent: 100 - used, windowSeconds: 18000, resetsAt, fetchedAt: now,
-    usageAllowed: typeof limit.allowed === 'boolean' ? limit.allowed : undefined }
+  function window(seconds: 18000 | 604800): { data?: UsageWindow; reason?: WindowReason } {
+    const matches = windows.filter(w => object(w) && w.limit_window_seconds === seconds) as Record<string, unknown>[]
+    if (!matches.length) return { reason: 'not-returned' }
+    if (matches.length !== 1) return { reason: 'invalid-response' }
+    const w = matches[0], used = w.used_percent
+    if (!finite(used) || used < 0 || used > 100) return { reason: 'invalid-response' }
+    let resetsAt: number | undefined
+    if (w.reset_at != null) {
+      if (!finite(w.reset_at) || !Number.isSafeInteger(w.reset_at) || w.reset_at <= 0 || w.reset_at * 1000 > 8.64e15) return { reason: 'invalid-response' }
+      resetsAt = w.reset_at * 1000
+      if (resetsAt <= now) return { reason: 'expired' }
+    }
+    return { data: { usedPercent: used, remainingPercent: 100 - used, windowSeconds: seconds, resetsAt } }
+  }
+  const five = window(18000), week = window(604800)
+  return { fiveHour: five.data, weekly: week.data, fiveHourReason: five.reason, weeklyReason: week.reason,
+    fetchedAt: now, usageAllowed: typeof limit.allowed === 'boolean' ? limit.allowed : undefined }
 }
 export function retryAfter(value: string | null, now: number): number | undefined {
   if (!value) return undefined
@@ -111,11 +113,11 @@ export function createUsageService(ctx: CodexContext, options: UsageOptions = {}
   const timeoutSignal = options.timeoutSignal ?? AbortSignal.timeout
   const now = options.now ?? Date.now
   let closed = false, paused = false, generation = 0, identity: string | undefined, scope: string | undefined
-  let cached: UsageReply | undefined, failures = 0
+  let cached: UsageReply | undefined, failures = 0, lastAttempt = -Infinity
   let flight: { controller: AbortController; job: Promise<UsageReply> } | undefined
   const unavailable = (reason: UsageReason, nextCheckAt = now() + 300_000): UsageReply => ({ state: 'unavailable', reason, accountScope: scope, nextCheckAt })
   function invalidate() {
-    generation++; identity = undefined; scope = undefined; cached = undefined; failures = 0
+    generation++; identity = undefined; scope = undefined; cached = undefined; failures = 0; lastAttempt = -Infinity
     flight?.controller.abort(); flight = undefined
   }
   function observe(g: Grant) {
@@ -123,9 +125,9 @@ export function createUsageService(ctx: CodexContext, options: UsageOptions = {}
     if (identity !== key) { invalidate(); identity = key; scope = randomUUID() }
   }
   function visible(reply: UsageReply): UsageReply {
-    if (reply.data && (now() >= reply.data.fetchedAt + 300_000 || now() >= (reply.data.resetsAt ?? Infinity)))
-      return { ...reply, state: 'unavailable', data: undefined, reason: reply.reason ?? 'invalid-response' }
-    return reply
+    const data = visibleUsageData(reply.data, now())
+    if (reply.data && !data) return { ...reply, state: 'unavailable', data: undefined, reason: reply.reason ?? 'invalid-response' }
+    return data === reply.data ? reply : { ...reply, data }
   }
   async function load(g: Grant, epoch: number, controller: AbortController, budget: AbortSignal): Promise<UsageReply> {
     const signal = AbortSignal.any([controller.signal, budget])
@@ -150,7 +152,7 @@ export function createUsageService(ctx: CodexContext, options: UsageOptions = {}
       const current = grantOf(await withSignal(ctx.credentials.readRecord(CODEX_KEY), signal)); check()
       if (fingerprint(current) !== fingerprint(g)) throw new UsageError('account-changed')
       failures = 0
-      cached = { state: 'ready', data, accountScope: scope, nextCheckAt: Math.min(now() + 60_000, data.resetsAt ?? Infinity) }
+      cached = { state: 'ready', data, accountScope: scope, nextCheckAt: Math.min(now() + USAGE_POLL_INTERVAL, data.fiveHour?.resetsAt ?? Infinity, data.weekly?.resetsAt ?? Infinity) }
       return cached
     } catch (error) {
       if (closed || epoch !== generation) return unavailable(closed ? 'service-unavailable' : 'account-changed', now())
@@ -170,7 +172,8 @@ export function createUsageService(ctx: CodexContext, options: UsageOptions = {}
       return cached
     }
   }
-  async function get(): Promise<UsageReply> {
+  /** Manual queries may bypass a successful poll cache, but never failure backoff. */
+  async function get(mode: 'auto' | 'manual' = 'auto'): Promise<UsageReply> {
     if (closed) return unavailable('service-unavailable')
     if (paused) return unavailable('sign-in-required')
     const budget = timeoutSignal(25_000)
@@ -182,7 +185,12 @@ export function createUsageService(ctx: CodexContext, options: UsageOptions = {}
     if (paused) return unavailable('sign-in-required')
     observe(g)
     if (flight) return flight.job
-    if (cached && cached.nextCheckAt > now()) return visible(cached)
+    if (cached) {
+      const manualDue = mode === 'manual' && cached.state === 'ready' && now() >= lastAttempt + USAGE_MANUAL_INTERVAL
+      if (!manualDue && (cached.nextCheckAt > now() || mode === 'manual' && now() < lastAttempt + USAGE_MANUAL_INTERVAL))
+        return { ...visible(cached), fromCache: true }
+    }
+    lastAttempt = now()
     const controller = new AbortController(), epoch = generation
     const task = { controller, job: undefined as unknown as Promise<UsageReply> }
     flight = task

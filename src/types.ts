@@ -3,6 +3,7 @@ import type { AuthorizationService } from '@deepseek-ai/dsh-authorization'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { AuthorizationNotice } from '@deepseek-ai/dsh-authorization/types'
 import type { PatchServices } from './model-patches.js'
+import type { UsageCommandServices } from './usage-command.js'
 
 export interface CodexContext {
   authorization: Pick<AuthorizationService, 'describe' | 'begin' | 'cancel'>
@@ -17,7 +18,8 @@ export interface WebContext {
 }
 
 export interface PluginContext extends CodexContext {
-  inject(services: string[], callback: (context: WebContext & PatchServices) => void): void
+  effect(factory: () => () => Promise<void> | void, label: string): void
+  inject(services: string[], callback: (context: WebContext & PatchServices & UsageCommandServices) => void): void
 }
 
 export interface ManagementState {

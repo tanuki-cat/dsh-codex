@@ -231,5 +231,5 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
       reply(400, { error: 'ChatGPT operation failed. Check your connection and account permissions, then retry.' })
     }
   } })
-  ctx.effect(() => () => { dispose(); usage?.dispose(); return manager.dispose() }, 'codex management routes')
+  ctx.effect(() => () => { dispose(); return manager.dispose() }, 'codex management routes')
 }

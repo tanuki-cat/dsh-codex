@@ -15,6 +15,7 @@
 import { createCodexManagement, registerCodexManagement } from './management.js'
 import { createModelPatches } from './model-patches.js'
 import { createUsageService } from './usage.js'
+import { registerUsageCommand } from './usage-command.js'
 import type { PluginContext } from './types.js'
 
 export const name = 'llm-chatgpt'
@@ -24,10 +25,12 @@ export function apply(ctx: PluginContext) {
   // Register independently of flow mount order. The status operation checks
   // availability dynamically, and the client hides the card until llm-pi-ai
   // offers the flow.
+  const usage = createUsageService(ctx)
+  ctx.effect(() => () => usage.dispose(), 'codex usage service')
+  ctx.inject(['commands'], commands => { registerUsageCommand(commands, usage) })
   let patches: ReturnType<typeof createModelPatches> | undefined
   ctx.inject(['settings', 'llm'], services => { patches = createModelPatches(ctx, services) })
   ctx.inject(['webServer', 'webRuntime'], web => {
-    const usage = createUsageService(ctx)
     registerCodexManagement(web, createCodexManagement(ctx, paused => usage.setPaused(paused ?? false)), () => patches, usage)
   })
 }

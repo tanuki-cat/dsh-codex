@@ -1,5 +1,5 @@
 ---
-description: "在 DSH 中登录 ChatGPT、补充 Codex 缺失模型、恢复原生目录并查看账号 5 小时额度。"
+description: "在 DSH 中登录 ChatGPT、补充 Codex 缺失模型、恢复原生目录并查询 5 小时与周剩余额度。"
 kind: "package-reference"
 ---
 
@@ -7,12 +7,13 @@ kind: "package-reference"
 
 ## 概要
 
-在 DSH 设置页登录 ChatGPT，预览并确认补充 Codex 缺失模型或恢复原生目录，在本机会话查看账号共享的 5 小时额度。OAuth 和推理协议由宿主 pi-ai 提供；可选模型和剩余额度不保证账号实际有权调用。
+在 DSH 设置页登录 ChatGPT，预览并确认补充 Codex 缺失模型或恢复原生目录，在本机会话查看账号共享的 5 小时剩余额度，并通过 `/usage` 查询周额度。OAuth 和推理协议由宿主 pi-ai 提供；可选模型和剩余额度不保证账号实际有权调用。
 
 ## 目录
 
 - [安装](#安装)
 - [使用与模型补丁](#使用)
+- [Codex usage 命令](#codex-usage-命令)
 - [Codex 5 小时额度条](#codex-5-小时额度条)
 - [网络](#网络)
 - [当前限制](#当前限制)
@@ -32,7 +33,7 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 - 在模型设置页的 `openai-codex` provider 卡片上渲染登录按钮；
 - 点击后驱动 pi-ai 自己的 OAuth 流程；
 - 显示账户（名称、plan、凭据到期时间）；
-- 在普通本机 Codex 会话显示账号共享的 5 小时额度；
+- 在普通本机 Codex 会话显示账号共享的 5 小时剩余额度，提供 `/usage` 查询 5 小时与周额度；
 - 提供退出登录并删除本地凭据（不撤销远端会话）；
 - 预览并确认补充缺失模型，重复检查时并入新安装的原生模型 ID；
 - 预览并单独确认恢复原生目录，明确列出被清除的显式模型配置及不可选模型。
@@ -49,13 +50,15 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 ### 使用发布安装包
 
-从 [v0.3.10 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.10>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.10/dsh-llm-chatgpt-0.3.10.tgz>)，在下载目录执行：
+从 [v0.3.11 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.11>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.11/dsh-llm-chatgpt-0.3.11.tgz>)，在下载目录执行：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.10.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.11.tgz
 ```
 
-该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。功能源码已在 `0.3.10-dev.4` 上完成真实 profile 和原 GUI 验收；正式安装包另做类型检查、构建、测试和入口 smoke。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。用户已反馈 `0.3.11-dev.2` 安装测试通过；正式版本保持该开发版功能源码，另做类型检查、构建与安装包 smoke。验收项及限制见 [0.3.11 发布说明](<docs/design-task-release-codex-usage-0.3.11.md>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+
+安装后重启对应 DSH Web 进程并重新加载页面，加载新的服务端命令与客户端卡片；不能仅靠浏览器刷新更新服务端插件。升级自开发版同样需要安装正式包。
 
 ### 从源码安装
 
@@ -74,7 +77,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.10.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.11.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -115,17 +118,25 @@ no_proxy=localhost,127.0.0.1,::1
 
 loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受影响。
 
+## Codex usage 命令
+
+登录 ChatGPT 后，在对话输入框提交无参数命令 `/usage`，直接展示账号的 5 小时与周额度，不调用模型。需要宿主提供 commands 服务；没有该服务的旧宿主仍可使用设置页登录和额度条。
+
+支持专用命令槽位的宿主中，结果默认展开为双窗口额度卡片；宽屏并排、窄屏上下排列，折叠后只显示两项简短百分比摘要。显示真正的彩色进度条，不在界面中拼接字符方块；旧历史文本可转换为卡片，无法识别的内容和错误保留为纯文本。无专用槽位的旧宿主仍显示原始文本。结果以剩余优先，附带已用百分比、完整重置日期、查询时间和宿主本地时区。进度条表示剩余比例；不将百分比估算为 token 数或请求次数。命令时区可能与远程浏览器不同。缺失、无效或已重置窗口分别提示，另一窗口仍可显示；未知重置时间不会猜测。
+
+主动查询距同账号最近实际查询不足一分钟时返回缓存并标注；超过一分钟可重新查询，但不能绕过失败退避和 Retry-After。查询与额度条共用缓存和并发请求，结果不包含账号 ID、邮箱或 OAuth token。暂时失败时仅保留十五分钟内且尚未重置的旧窗口，并显示失败和旧数据提示。
+
 ## Codex 5 小时额度条
 
-选择 `openai-codex` 时，输入栏模型选择器左侧展示账号共享的 5 小时额度使用条和已用百分比。悬浮或键盘聚焦可查看剩余百分比、重置时间、最后更新时间和查询状态；点击可再次检查，但受刷新间隔限制。
+选择 `openai-codex` 时，输入栏模型选择器左侧展示账号共享的 5 小时剩余额度条和“剩余可用”百分比。填充比例和无障碍进度值均表示剩余；正常为绿色，剩余 ≤20% 为橙色、≤5% 为红色；命令卡片与输入栏额度条一致。悬浮或键盘聚焦可查看剩余与已用比例、重置时间、最后更新时间和查询状态；点击可再次检查，但不绕过刷新间隔。
 
 - 额度来自官方 Codex 客户端使用的 usage 接口，不按本会话 token 数估算；5 小时剩余不保证周额度、模型权限或其他限制仍可用。
-- 服务端复用 DSH 存储的登录凭据，不向页面传递 OAuth token。查询不要求模型设置可写；临近过期的凭据刷新需要兼容的宿主 API 和可写凭据存储。成功查询最多缓存 60 秒，不跨重置时间；同一服务实例内多会话请求合并，账号变化或退出登录清除旧额度。
-- 页面隐藏或离线时暂停轮询。客户端两次查询至少间隔 60 秒，还需遵守服务端返回的再次检查时间；点击不会绕过缓存或失败退避。网络暂时失败可展示同账号旧数据，最多五分钟且不跨重置时间；旧数据带标记。未知、未登录或不支持的窗口显示 `—`，不伪装成 0%。
+- 服务端复用 DSH 存储的登录凭据，不向页面传递 OAuth token。查询不要求模型设置可写；临近过期的凭据刷新需要兼容的宿主 API 和可写凭据存储。成功查询供自动轮询缓存五分钟，最早窗口重置会提前触发检查；同一服务实例内多会话请求合并，账号变化或退出登录清除旧额度。每个窗口到达重置时间即停止显示其旧值，不影响另一仍有效的窗口。
+- 首次显示立即查询，正常自动轮询间隔五分钟；页面隐藏或离线时暂停。客户端最短检查间隔一分钟，还需遵守服务端再次检查时间；点击不会绕过缓存或失败退避。正常五分钟周期内不标旧，网络暂时失败可保留同账号旧数据至十五分钟，但不跨对应窗口重置时间；旧数据带标记。未知、未登录或不支持的窗口显示 `—`，不伪装成 0%。
 - 首版仅在 loopback Web Host 的普通会话显示；远端 subagent 和无法确认路由的会话隐藏。不支持额度槽位的旧宿主仍保留设置页登录。
 - 该后端接口不是稳定公开 API；字段或权限改变时降级为未知额度，不影响发送消息。
 
-实现方案和验证边界见 [额度条方案](<docs/design-task-feature-codex-five-hour-usage-bar.md>)。本功能属于 `0.3.10`，通过 GitHub Release 提供安装包，未发布到 npm。发布边界见 [0.3.10 发布说明](<docs/design-task-release-codex-five-hour-usage-0.3.10.md>)。
+当前命令、卡片与显示行为的版本边界见 [0.3.11 发布说明](<docs/design-task-release-codex-usage-0.3.11.md>)。初版查询实施记录见 [usage 实施方案](<docs/design-task-feature-codex-usage-command.md>)；`0.3.10` 的历史额度条边界见 [0.3.10 发布说明](<docs/design-task-release-codex-five-hour-usage-0.3.10.md>)。
 
 ## 当前限制
 
@@ -153,7 +164,7 @@ DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 
 [宿主目录测试](<tests/host-catalog.test.ts>)覆盖请求版本选择、刷新事务与并发避免重复旋转；[宿主鉴权集成测试](<tests/installed-host-catalog.test.ts>)用真实 pi-ai 鉴权解析器验证同一个 DSH 凭据事务中的刷新行为，但使用替身令牌交换，不连接真实 OAuth endpoint。
 
-[额度服务测试](<tests/usage.test.ts>)覆盖窗口识别、响应大小、超时、账号隔离、缓存合并、退避和刷新；[额度客户端测试](<tests/client-usage.test.ts>)覆盖隐藏/离线、旧数据到期、晚到响应、受限手动刷新及独立进度语义。[客户端集成测试](<tests/client.test.ts>)还验证额度条在真实已安装 Host SlotCore 中注册并与其它 list 贡献共存。
+[额度服务测试](<tests/usage.test.ts>)覆盖双窗口识别、独立重置、响应大小、超时、账号隔离、缓存合并、主动查询限频、退避和刷新；[额度客户端测试](<tests/client-usage.test.ts>)覆盖五分钟边界、隐藏/离线、旧数据到期、晚到响应、剩余填充、色阶及独立进度语义。[命令测试](<tests/usage-command.test.ts>)覆盖文本、缓存、错误和取消；[命令宿主集成](<tests/installed-usage-command.test.ts>)用真实 CommandRuntime 验证发现、执行、日志和卸载，网络与会话存储使用替身。[客户端集成测试](<tests/client.test.ts>)还验证额度条在真实已安装 Host SlotCore 中注册并与其它 list 贡献共存。
 
 不设置 `DSH_INSTALL_ROOT` 时，依赖已安装宿主的集成测试会跳过；上述路径是本机示例，请替换为实际 DSH 安装目录。
 

@@ -15,7 +15,7 @@ const { createCodexManagement, registerCodexManagement, trustedManagementRequest
 const { PatchError } = await import('../lib/model-patches.js')
 hooks.deregister()
 
-test('usage route inherits capability checks, no-store and lifecycle disposal', async () => {
+test('usage route inherits capability checks without disposing the parent-owned service', async () => {
   let route, inject, cleanup, calls = 0, disposed = false
   const manager = { async dispose() {}, async status() {}, async start() {}, async cancel() {}, async signOut() {} }
   const usage = { async get() { calls++; return { state: 'unavailable', reason: 'no-five-hour-window', nextCheckAt: 1000 } }, dispose() { disposed = true } }
@@ -36,7 +36,7 @@ test('usage route inherits capability checks, no-store and lifecycle disposal', 
   assert.equal((await request('POST')).code, 405); assert.equal(calls, 0)
   const result = await request(); assert.equal(result.code, 200); assert.equal(result.headers['cache-control'], 'no-store')
   assert.equal(result.body.reason, 'no-five-hour-window'); assert.equal(calls, 1)
-  await cleanup(); assert.equal(disposed, true)
+  await cleanup(); assert.equal(disposed, false)
 })
 
 test('management protects against wrong capability, cross-site origins and DNS rebinding', () => {

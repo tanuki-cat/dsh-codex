@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createUsageController, createUsageView, validUsage, displayData, usageDictionaries } from '../src/client-usage.ts'
 import { json } from './helpers.ts'
-const reply = (now = 1_000_000, used = 42) => ({ state: 'ready', accountScope: 'opaque-a', data: { usedPercent: used, remainingPercent: 100 - used, windowSeconds: 18000, fetchedAt: now, resetsAt: now + 600_000 }, nextCheckAt: now + 60_000 })
+const reply = (now = 1_000_000, used = 42) => ({ state: 'ready', accountScope: 'opaque-a',
+  data: { fiveHour: { usedPercent: used, remainingPercent: 100 - used, windowSeconds: 18000, resetsAt: now + 1_200_000 },
+    weekly: { usedPercent: 10, remainingPercent: 90, windowSeconds: 604800, resetsAt: now + 7 * 86400_000 }, fetchedAt: now }, nextCheckAt: now + 300_000 })
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 async function until(condition) { for (let i = 0; i < 100; i++) { if (condition()) return; await Promise.resolve() }; assert.fail('microtask chain did not settle') }
 function fixture(t, fetcher) {
@@ -23,10 +25,11 @@ function fixture(t, fetcher) {
 test('client validates DTO state and never treats unknown quota as zero', () => {
   assert.equal(validUsage(reply()), true)
   assert.equal(validUsage({ state: 'unavailable', reason: 'no-five-hour-window', nextCheckAt: 0 }), true)
-  for (const value of [null, {}, { ...reply(), state: 'unavailable' }, { ...reply(), data: { ...reply().data, remainingPercent: 999 } },
+  for (const value of [null, {}, { ...reply(), state: 'unavailable' }, { ...reply(), data: { ...reply().data, fiveHour: { ...reply().data.fiveHour, remainingPercent: 999 } } },
     { ...reply(), reason: 'network-error' }, { ...reply(), state: 'stale', reason: 'permission-denied' }]) assert.equal(validUsage(value), false)
-  assert.equal(displayData(reply(), 1_300_000), undefined)
-  const reset = reply(); reset.data.resetsAt = 1_010_000; assert.equal(displayData(reset, 1_010_000), undefined)
+  assert.equal(displayData(reply(), 1_900_000), undefined)
+  const reset = reply(); reset.data.fiveHour.resetsAt = 1_010_000; assert.equal(displayData(reset, 1_010_000).fiveHour, undefined)
+  assert.ok(displayData(reset, 1_010_000).weekly)
 })
 test('subscribers share one request with capability and constrained manual refresh', async t => {
   const f = fixture(t, async (url, init) => { assert.equal(url, '/manage/usage'); assert.equal(init.headers['x-dsh-chatgpt-token'], 'fake-capability'); assert.equal(init.cache, 'no-store'); return json(reply()) })
@@ -39,38 +42,39 @@ test('subscribers share one request with capability and constrained manual refre
 test('hidden and offline pages stop polling and resume with one freshness check', async t => {
   const f = fixture(t); f.controller.subscribe(() => {})
   await until(() => !f.controller.getSnapshot().loading)
-  f.visible(false); assert.equal(f.timers.size, 0); f.advance(60_000); assert.equal(f.calls(), 1)
+  f.visible(false); assert.equal(f.timers.size, 0); f.advance(300_000); assert.equal(f.calls(), 1)
   f.visible(true); f.wake(); await until(() => !f.controller.getSnapshot().loading); assert.equal(f.calls(), 2)
-  f.online(false); assert.equal(f.timers.size, 1); f.advance(60_000); f.online(true); await until(() => !f.controller.getSnapshot().loading); assert.equal(f.calls(), 3)
+  f.online(false); assert.equal(f.timers.size, 1); f.advance(300_000); f.online(true); await until(() => !f.controller.getSnapshot().loading); assert.equal(f.calls(), 3)
 })
 test('visible offline pages mark data stale and expire it without network requests', async t => {
   const f = fixture(t); f.controller.subscribe(() => {})
   await until(() => !f.controller.getSnapshot().loading)
-  f.online(false); f.advance(60_000)
-  assert.equal(f.calls(), 1); assert.equal(f.controller.getSnapshot().updatedAt, 1_060_000)
+  f.online(false); f.advance(300_000)
+  assert.equal(f.calls(), 1); assert.equal(f.controller.getSnapshot().updatedAt, 1_300_000)
   assert.ok(f.controller.getSnapshot().reply.data)
-  f.advance(240_000); assert.equal(f.controller.getSnapshot().reply.data, undefined)
+  f.advance(600_000); assert.equal(f.controller.getSnapshot().reply.data, undefined)
   assert.equal(f.calls(), 1); assert.equal(f.timers.size, 0)
   f.online(true); await until(() => !f.controller.getSnapshot().loading); assert.equal(f.calls(), 2)
 })
 test('quota expires at reset while a refresh response is still pending', async t => {
   const late = deferred(); let calls = 0
-  const initial = reply(); initial.data.resetsAt = 1_090_000
+  const initial = reply(); initial.data.fiveHour.resetsAt = 1_330_000
   const f = fixture(t, async () => ++calls === 1 ? json(initial) : late.promise)
   f.controller.subscribe(() => {}); await until(() => !f.controller.getSnapshot().loading)
-  f.advance(60_000); assert.equal(f.calls(), 2); assert.equal(f.controller.getSnapshot().loading, true)
+  f.advance(300_000); assert.equal(f.calls(), 2); assert.equal(f.controller.getSnapshot().loading, true)
   assert.ok(f.controller.getSnapshot().reply.data)
-  f.advance(30_000); assert.equal(f.controller.getSnapshot().reply.data, undefined)
+  f.advance(30_000); assert.equal(f.controller.getSnapshot().reply.data.fiveHour, undefined)
+  assert.ok(f.controller.getSnapshot().reply.data.weekly)
   late.resolve(json(initial)); await until(() => !f.controller.getSnapshot().loading)
-  assert.equal(f.controller.getSnapshot().reply.data, undefined)
+  assert.equal(f.controller.getSnapshot().reply.data.fiveHour, undefined)
 })
 
 test('offline pages clear data at reset and hidden cancelled responses cannot publish', async t => {
-  const reset = reply(); reset.data.resetsAt = 1_015_000
+  const reset = reply(); reset.data.fiveHour.resetsAt = 1_015_000
   const f = fixture(t, async () => json(reset)); f.controller.subscribe(() => {})
   await until(() => !f.controller.getSnapshot().loading)
   f.online(false); f.advance(15_000)
-  assert.equal(f.controller.getSnapshot().reply.data, undefined); assert.equal(f.calls(), 1)
+  assert.equal(f.controller.getSnapshot().reply.data.fiveHour, undefined); assert.equal(f.calls(), 1)
   const late = deferred(); const done = deferred(); let signal
   const g = fixture(t, async (_url, init) => { signal = init.signal; const result = await late.promise; done.resolve(); return result })
   g.controller.subscribe(() => {}); g.visible(false); assert.equal(signal.aborted, true)
@@ -103,19 +107,19 @@ test('local 403 clears historic data and does not become a Codex permission erro
   let bad = false
   const f = fixture(t, async () => bad ? new Response('', { status: 403 }) : json(reply()))
   f.controller.subscribe(() => {}); await until(() => !f.controller.getSnapshot().loading)
-  bad = true; f.advance(60_000); await until(() => !f.controller.getSnapshot().loading)
+  bad = true; f.advance(300_000); await until(() => !f.controller.getSnapshot().loading)
   assert.equal(f.controller.getSnapshot().reply, undefined); assert.equal(f.controller.getSnapshot().localError, 'reload')
 })
 test('Retry-After cooldown still expires historic data on time', async t => {
   let bad = false
   const f = fixture(t, async () => bad ? json({ ...reply(), state: 'stale', reason: 'rate-limited', nextCheckAt: 9_000_000 }) : json(reply()))
   f.controller.subscribe(() => {}); await until(() => !f.controller.getSnapshot().loading)
-  bad = true; f.advance(60_000); await until(() => !f.controller.getSnapshot().loading)
+  bad = true; f.advance(300_000); await until(() => !f.controller.getSnapshot().loading)
   assert.equal(f.controller.getSnapshot().reply.state, 'stale')
-  f.advance(240_000); assert.equal(f.controller.getSnapshot().reply.data, undefined); assert.equal(f.calls(), 2)
+  f.advance(600_000); assert.equal(f.controller.getSnapshot().reply.data, undefined); assert.equal(f.calls(), 2)
 })
 test('no Codex or unavailable session produces no bar; valid bar has numeric progress semantics', () => {
-  for (const used of [0, 42, 100]) {
+  for (const used of [0, 42, 79.9, 80, 94.9, 95, 100]) {
     const data = { reply: reply(1_000_000, used), updatedAt: 1_000_000, loading: false }
     const effects = []
     const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
@@ -126,15 +130,41 @@ test('no Codex or unavailable session produces no bar; valid bar has numeric pro
     const seat = Seat(props); const bar = seat.type(seat.props)
     const nodes = []; const walk = v => { if (!v || typeof v !== 'object') return; nodes.push(v); for (const child of v.children ?? []) walk(child) }; walk(bar)
     const progress = nodes.find(n => n.props.role === 'progressbar')
-    assert.equal(progress.props['aria-valuenow'], used); assert.equal(progress.props['aria-valuemin'], 0); assert.equal(progress.props['aria-valuemax'], 100)
+    assert.equal(progress.props['aria-valuenow'], 100 - used); assert.equal(progress.props['aria-valuemin'], 0); assert.equal(progress.props['aria-valuemax'], 100)
     const button = nodes.find(n => n.type === 'button')
     const descendants = []; const collect = v => { if (!v || typeof v !== 'object') return; descendants.push(v); for (const child of v.children ?? []) collect(child) }; collect(button)
     assert.equal(descendants.includes(progress), false, 'button descendants are presentational to assistive technology')
-    assert.ok(button.props['aria-label'].includes('Used ' + used + '%'))
+    assert.ok(button.props['aria-label'].includes('Remaining ' + Math.round(100 - used) + '%'))
     assert.equal(progress.props.className, 'dsh-codex-usage-semantic')
+    assert.equal(nodes.find(n => n.props.className === 'dsh-codex-usage-fill').props.style.width, (100 - used) + '%')
+    assert.equal(bar.props['data-tone'], used >= 95 ? 'danger' : used >= 80 ? 'warn' : 'normal')
+    assert.equal(bar.props['data-stale'], false)
     assert.ok(nodes.find(n => n.props.role === 'tooltip'))
     assert.equal(Seat({ ...props, available: false }), null)
     assert.equal(Seat({ ...props, directory: { ...props.directory, getSnapshot: () => ({ current: null }) } }), null)
     assert.equal(Seat({ ...props, directory: { ...props.directory, getSnapshot: () => ({ current: { provider: 'other' } }) } }), null)
   }
+})
+
+test('polling waits five minutes and retains fresh remaining quota before the boundary', async t => {
+  const f = fixture(t); f.controller.subscribe(() => {})
+  await until(() => !f.controller.getSnapshot().loading)
+  f.advance(60_000); f.wake(); await f.controller.refresh(); assert.equal(f.calls(), 1)
+  f.advance(239_999); assert.equal(f.calls(), 1)
+  assert.ok(displayData(f.controller.getSnapshot().reply, 1_299_999).fiveHour)
+  f.advance(1); await until(() => !f.controller.getSnapshot().loading); assert.equal(f.calls(), 2)
+})
+test('partial DTO and unknown five-hour quota have no numerical progressbar', () => {
+  const partial = reply(); delete partial.data.fiveHour; partial.data.fiveHourReason = 'not-returned'
+  assert.equal(validUsage(partial), true)
+  assert.equal(validUsage({ ...partial, data: { ...partial.data, fiveHourReason: 'private-error' } }), false)
+  const React = { createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
+    useEffect() {}, useSyncExternalStore: (_subscribe, get) => get(), useId: () => 'tip' }
+  const Seat = createUsageView(React, { getSnapshot: () => ({ reply: partial, updatedAt: 1_000_000, loading: false }), subscribe: () => () => {}, refresh: async () => {} })
+  const seat = Seat({ directory: { getSnapshot: () => ({ current: { provider: 'openai-codex' } }), subscribe: () => () => {} }, available: true, load() {}, t: k => usageDictionaries.zh[k] })
+  const bar = seat.type(seat.props), nodes = []
+  const walk = node => { if (!node || typeof node !== 'object') return; nodes.push(node); for (const child of node.children ?? []) walk(child) }; walk(bar)
+  assert.equal(nodes.some(n => n.props.role === 'progressbar'), false)
+  assert.equal(bar.props['data-tone'], 'normal')
+  assert.ok(JSON.stringify(bar).includes('—')); assert.ok(JSON.stringify(bar).includes('账号未返回 5 小时额度'))
 })

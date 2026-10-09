@@ -69,7 +69,10 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
     ...sandbox, window: { __ModuleLoader__: { load(value) { registration = value } } },
   })
   assert.equal(registration.id, 'dsh-llm-chatgpt')
-  const module = registration.factory(name => { assert.equal(name, 'react'); return React })
+  const module = registration.factory(name => {
+    if (name === '@deepseek-ai/dsh-client-ui-primitives') return { DisclosureRow: 'disclosure-row', IconApiOutlineRegular: 'command-icon' }
+    assert.equal(name, 'react'); return React
+  })
   // Seats the module registers on slots other than the settings page itself.
   const seats = new Map()
   return {
@@ -89,7 +92,7 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
           if (typeof dispose === 'function') disposers.push(dispose)
         },
         slots: {
-          inject(name, callback) { assert.equal(name, 'settings.models.provider-card'); callback() },
+          inject(name, callback) { if (name === 'conversation.chat.commandview') return; assert.equal(name, 'settings.models.provider-card'); callback() },
           register(value, view) { seats.set(value.key, { entry: value, component: view }) },
         },
       }
@@ -222,6 +225,7 @@ test('quota list contribution registers and coexists in the real installed Host 
   cleanups.push(core.register({ name: 'root', children: {
     'conversation.input.right': { kind: 'list', scope: 'session' },
     'settings.models.provider-card': { kind: 'keyed', scope: 'root' },
+    'conversation.chat.commandview': { kind: 'keyed', scope: 'session' },
   } }, () => null))
   cleanups.push(core.register({ name: 'conversation.input.right', id: 'existing-contribution' }, () => null))
   assert.throws(() => core.register({ name: 'conversation.input.right', key: 'wrong-key' }, () => null), /requires options.id/)
@@ -240,6 +244,9 @@ test('quota list contribution registers and coexists in the real installed Host 
   const usage = entries.find(entry => entry.options.id === 'codex-five-hour-usage')
   assert.equal(usage.inject('parent').directory, store)
   assert.equal(core.entriesOfSlot('settings.models.provider-card')[0].options.key, 'llm-pi-ai')
+  const command = core.entriesOfSlot('conversation.chat.commandview')[0]
+  assert.equal(command.options.key, 'usage'); assert.equal(command.options.id, undefined)
+  assert.equal(typeof command.component, 'function')
 })
 
 test('the card is seated on the llm-pi-ai family and registers bilingual copy', () => {

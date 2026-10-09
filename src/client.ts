@@ -11,6 +11,8 @@
 import type * as React from 'react'
 import { createUsageController, createUsageView, usageCss, usageDictionaries } from './client-usage.js'
 import type { ModelStore, UsageController } from './client-usage.js'
+import { createUsageCommandView, usageCommandCss, usageCommandDictionaries } from './client-usage-command.js'
+import type { UsagePrimitives, UsageCommandNode } from './client-usage-command.js'
 
 type ManagementStatus = {
   state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
@@ -82,13 +84,14 @@ type ClientContext = {
   slots: { inject(name: string, callback: () => void): void; register(entry: { name: string; key: string; locale: string; inject: () => { t: (key: string) => string } }, view: (props: CardProps) => React.ReactNode): void }
 }
 declare global {
-  interface Window { __ModuleLoader__: { load(value: { id: string; factory(require: (id: 'react') => typeof import('react')): object }): void } }
+  interface Window { __ModuleLoader__: { load(value: { id: string; factory(require: { (id: 'react'): typeof import('react'); (id: '@deepseek-ai/dsh-client-ui-primitives'): UsagePrimitives }): object }): void } }
   var __DSH_CHATGPT_MANAGEMENT__: Record<string, Connection> | undefined
 }
 window.__ModuleLoader__.load({
   id: 'dsh-llm-chatgpt',
   factory(require) {
     const React = require('react')
+    const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
     const { createElement: h, useEffect, useState } = React
     const NS = 'chatgptManagement'
     const STYLE_ID = 'dsh-llm-chatgpt/ChatgptCodex.css'
@@ -147,7 +150,7 @@ window.__ModuleLoader__.load({
       const tag = document.createElement('style')
       tag.dataset.plugin = 'dsh-llm-chatgpt'
       tag.dataset.pluginCss = STYLE_ID
-      tag.textContent = css + usageCss
+      tag.textContent = css + usageCss + usageCommandCss
       document.head.appendChild(tag)
       return () => tag.remove()
     }
@@ -488,6 +491,15 @@ window.__ModuleLoader__.load({
       ctx.effect(() => mountStyles(), 'chatgpt sign-in styles')
       ctx.effect(() => ctx.locale.register(NS, dictionaries), 'chatgpt sign-in translations')
       const t = ctx.locale.bind(NS)
+      ctx.slots.inject('conversation.chat.commandview', () => {
+        const commandNS = 'codexUsageCommand'
+        ctx.effect(() => ctx.locale.register(commandNS, usageCommandDictionaries), 'codex usage command translations')
+        const slots = ctx.slots as unknown as {
+          register(entry: { name: string; key: string; locale: string; inject(): { t(key: string): string } }, view: (props: { node: UsageCommandNode; t(key: string): string }) => React.ReactNode): void
+        }
+        slots.register({ name: 'conversation.chat.commandview', key: 'usage', locale: commandNS,
+          inject: () => ({ t: ctx.locale.bind(commandNS) }) }, createUsageCommandView(React, primitives))
+      })
       // The seat is keyed by the row's settings namespace, so this renders on
       // every llm-pi-ai provider card — openai-codex among them — and nowhere
       // else. Registered unconditionally: the Host decides per request whether

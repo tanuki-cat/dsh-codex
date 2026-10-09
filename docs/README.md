@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.10`。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
+当前包版本为 `0.3.11`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.11>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
 
 ## 目录
 
@@ -20,7 +20,9 @@ kind: "reference"
 
 - [安装与前置条件](<../README.md#安装>)：发布包、源码打包和本地安装脚本。
 - [登录与缺失模型补丁](<../README.md#使用>)：预览、签名确认、原生目录恢复及失败处理。
-- [Codex 5 小时额度条](<../README.md#codex-5-小时额度条>)：账号共享额度、刷新、旧数据与显示条件。
+- [Codex usage 命令](<../README.md#codex-usage-命令>)：5 小时与周剩余额度、主动查询和缓存提示。
+- [Codex 5 小时额度条](<../README.md#codex-5-小时额度条>)：剩余显示、五分钟轮询、旧数据与显示条件。
+- [usage 命令与剩余额度实施方案](<design-task-feature-codex-usage-command.md>)：双窗口查询、五分钟轮询及本次实施验收记录。
 - [验证范围](<../README.md#验证范围>)：自动化测试、宿主集成及真实环境验收边界。
 - [更新日志](<../CHANGELOG.md>)：版本功能和对应验证记录。
 
@@ -30,6 +32,7 @@ kind: "reference"
 | --- | --- |
 | [模型补丁审查处理记录](<design-task-fix-codex-model-patch-review-0.3.9.md>) | 0.3.9 的逐项修复、风险缓解与未验证项；替代 0.3.8 方案作为该版本处理依据。 |
 | [5 小时额度条发布说明](<design-task-release-codex-five-hour-usage-0.3.10.md>) | 0.3.10 的发布内容、GUI 样例和已执行/未执行验收。 |
+| [usage 命令与卡片发布说明](<design-task-release-codex-usage-0.3.11.md>) | 0.3.11 的双窗口命令、剩余三色进度、五分钟轮询和验证边界。 |
 
 ## 历史方案与审查
 

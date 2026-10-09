@@ -47,22 +47,40 @@ test('parser identifies duration rather than position and ignores model-specific
     const p = payload(used); [p.rate_limit.primary_window, p.rate_limit.secondary_window] = [p.rate_limit.secondary_window, p.rate_limit.primary_window]
     p.additional_rate_limits = [{ rate_limit: { primary_window: { limit_window_seconds: 18000, used_percent: 90 } } }]
     const result = parseUsage(p, 1_000_000, 'account-a')
-    assert.equal(result.usedPercent, used); assert.equal(result.remainingPercent, 100 - used); assert.equal(result.resetsAt, 10_000_000)
+    assert.equal(result.fiveHour.usedPercent, used); assert.equal(result.fiveHour.remainingPercent, 100 - used); assert.equal(result.fiveHour.resetsAt, 10_000_000)
+    assert.equal(result.weekly.remainingPercent, 90); assert.equal(result.weekly.windowSeconds, 604800)
   }
 })
-test('parser rejects ambiguous invalid expired and cross-account usage', () => {
-  const rejects = (p, reason = 'invalid-response') => assert.throws(() => parseUsage(p, 1_000_000, 'account-a'), e => e.reason === reason)
-  for (const value of [undefined, [], '', NaN]) rejects(value)
-  rejects({ rate_limit: null }, 'no-five-hour-window')
-  rejects({ rate_limit: {} }, 'no-five-hour-window')
-  rejects({ ...payload(), account_id: 'account-b' }, 'account-changed')
-  for (const used of [-1, 101, NaN, Infinity, '42', null]) rejects(payload(used))
-  for (const reset of [0, 999, -1, '10000', 1e16]) rejects(payload(42, reset))
-  const duplicate = payload(); duplicate.rate_limit.secondary_window = duplicate.rate_limit.primary_window; rejects(duplicate)
-  const noWindow = payload(); noWindow.rate_limit.primary_window.limit_window_seconds = 100; rejects(noWindow, 'no-five-hour-window')
-  const malformed = payload(); malformed.rate_limit.allowed = 'yes'; rejects(malformed)
+test('parser rejects global corruption and degrades recognized windows independently', () => {
+  const parse = p => parseUsage(p, 1_000_000, 'account-a')
+  for (const value of [undefined, [], '', NaN, { rate_limit: [] }, { rate_limit: { primary_window: {} } }])
+    assert.throws(() => parse(value), e => e.reason === 'invalid-response')
+  assert.throws(() => parse({ ...payload(), account_id: 'account-b' }), e => e.reason === 'account-changed')
+  for (const p of [{ rate_limit: null }, { rate_limit: {} }]) {
+    const result = parse(p); assert.equal(result.fiveHour, undefined); assert.equal(result.fiveHourReason, 'not-returned'); assert.equal(result.weeklyReason, 'not-returned')
+  }
+  for (const used of [-1, 101, NaN, Infinity, '42', null]) {
+    const result = parse(payload(used)); assert.equal(result.fiveHourReason, 'invalid-response'); assert.ok(result.weekly)
+  }
+  for (const reset of [0, -1, '10000', 1e16, 1000.5]) {
+    const result = parse(payload(42, reset)); assert.equal(result.fiveHourReason, 'invalid-response'); assert.equal(result.fiveHour, undefined)
+  }
+  const expired = payload(); expired.rate_limit.primary_window.reset_at = 999
+  assert.equal(parse(expired).fiveHourReason, 'expired'); assert.ok(parse(expired).weekly)
+  const duplicate = payload(); duplicate.rate_limit.secondary_window = duplicate.rate_limit.primary_window
+  assert.equal(parse(duplicate).fiveHourReason, 'invalid-response')
+  const malformed = payload(); malformed.rate_limit.allowed = 'yes'
+  assert.throws(() => parse(malformed), e => e.reason === 'invalid-response')
   const missingReset = payload(); delete missingReset.rate_limit.primary_window.reset_at
-  assert.equal(parseUsage(missingReset, 1_000_000, 'account-a').resetsAt, undefined)
+  assert.equal(parse(missingReset).fiveHour.resetsAt, undefined)
+  for (const name of ['primary_window', 'secondary_window']) {
+    const p = payload(); delete p.rate_limit[name]
+    const result = parse(p)
+    assert.equal(name === 'primary_window' ? result.fiveHourReason : result.weeklyReason, 'not-returned')
+    assert.ok(name === 'primary_window' ? result.weekly : result.fiveHour)
+  }
+  const invalidWeek = payload(); invalidWeek.rate_limit.secondary_window.used_percent = 101
+  assert.ok(parse(invalidWeek).fiveHour); assert.equal(parse(invalidWeek).weeklyReason, 'invalid-response')
 })
 test('fetch sends only fixed endpoint and credential headers and classifies HTTP failures', async () => {
   for (const [status, reason] of [[401, 'credential-expired'], [403, 'permission-denied'], [429, 'rate-limited'], [500, 'network-error']]) {
@@ -82,7 +100,7 @@ test('Retry-After accepts seconds and future HTTP dates without unsafe deadlines
   assert.equal(retryAfter('Thu, 01 Jan 1970 00:20:00 GMT', 1_000_000), 1_200_000)
   for (const value of ['bad', '-1', '1e99', '', null]) assert.equal(retryAfter(value, 1_000_000), undefined)
 })
-test('successful requests share one flight and cache for sixty seconds', async t => {
+test('successful requests share one flight and cache for five minutes', async t => {
   let calls = 0; const started = deferred(), response = deferred()
   const f = fixture(t, async () => { calls++; started.resolve(); return response.promise })
   const a = f.service.get(), b = f.service.get(); await started.promise
@@ -90,22 +108,23 @@ test('successful requests share one flight and cache for sixty seconds', async t
   const results = await Promise.all([a, b]); assert.deepEqual(results[0], results[1])
   const serialized = JSON.stringify(results[0]); for (const secret of ['fake-access', 'fake-refresh', 'account-a']) assert.equal(serialized.includes(secret), false)
   await f.service.get(); assert.equal(calls, 1)
-  f.advance(60_000); await f.service.get(); assert.equal(calls, 2)
+  f.advance(299_999); await f.service.get(); assert.equal(calls, 1)
+  f.advance(1); await f.service.get(); assert.equal(calls, 2)
 })
-test('transient failures retain data only within five minutes and recover after backoff', async t => {
+test('transient failures retain data only within fifteen minutes and recover after backoff', async t => {
   let bad = false, calls = 0
   const f = fixture(t, async () => { calls++; if (bad) throw new Error('private'); return json(payload()) })
-  await f.service.get(); bad = true; f.advance(60_000)
+  await f.service.get(); bad = true; f.advance(300_000)
   assert.equal((await f.service.get()).state, 'stale')
   await f.service.get(); assert.equal(calls, 2)
-  f.advance(241_000); assert.equal((await f.service.get()).data, undefined)
+  f.advance(600_000); assert.equal((await f.service.get()).data, undefined)
   bad = false; f.advance(300_000); assert.equal((await f.service.get()).state, 'ready')
 })
 test('identity and permission failures clear previously valid data', async t => {
   for (const status of [401, 403]) {
     let bad = false
     const f = fixture(t, async () => bad ? new Response('', { status }) : json(payload()))
-    await f.service.get(); f.advance(60_000); bad = true
+    await f.service.get(); f.advance(300_000); bad = true
     const result = await f.service.get(); assert.equal(result.state, 'unavailable'); assert.equal(result.data, undefined)
   }
 })
@@ -113,7 +132,7 @@ test('cache never crosses reset and external credential replacement invalidates 
   let calls = 0
   const f = fixture(t, async () => { calls++; return json(payload(42, 1030)) })
   const initial = await f.service.get(); f.advance(30_000)
-  assert.equal((await f.service.get()).data, undefined)
+  assert.equal((await f.service.get()).data.fiveHour, undefined)
   f.credentials.values.set(key, grant({ accountId: 'account-b' })); await f.service.get()
   assert.equal(calls, 3)
   assert.notEqual((await f.service.get()).accountScope, initial.accountScope)
@@ -125,7 +144,7 @@ test('credential change during in-flight fetch discards late data and cannot cle
   f.credentials.values.set(key, grant({ accountId: 'account-b', access: 'second' }))
   const fresh = await f.service.get(); response.resolve(json(payload()))
   assert.equal((await old).data, undefined); assert.equal(fresh.state, 'ready')
-  assert.deepEqual(await f.service.get(), fresh)
+  assert.deepEqual(await f.service.get(), { ...fresh, fromCache: true })
 })
 test('failure path also rechecks external identity', async t => {
   const entered = deferred(), release = deferred()
@@ -156,4 +175,41 @@ test('refresh failure is negatively cached and dispose rejects late results', as
   f.credentials.values.set(key, grant({ expires: 1 })); assert.equal((await f.service.get()).reason, 'refresh-failed')
   await f.service.get(); assert.equal(calls, 1)
   f.service.dispose(); assert.equal((await f.service.get()).reason, 'service-unavailable')
+})
+
+test('manual queries bypass successful five-minute cache only after one minute', async t => {
+  let calls = 0
+  const f = fixture(t, async () => { calls++; return json(payload()) })
+  await f.service.get(); f.advance(59_999)
+  assert.equal((await f.service.get('manual')).fromCache, true); assert.equal(calls, 1)
+  f.advance(1); const live = await f.service.get('manual')
+  assert.equal(live.fromCache, undefined); assert.equal(calls, 2)
+  await f.service.get(); assert.equal(calls, 2)
+  f.advance(60_000); await f.service.get(); assert.equal(calls, 2)
+})
+test('manual and automatic queries cannot bypass failure Retry-After', async t => {
+  let bad = false, calls = 0
+  const f = fixture(t, async () => { calls++; return bad ? new Response('', { status: 429, headers: { 'retry-after': '1800' } }) : json(payload()) })
+  await f.service.get(); f.advance(60_000); bad = true
+  const limited = await f.service.get('manual'); assert.equal(limited.state, 'stale')
+  f.advance(300_000); await f.service.get('manual'); await f.service.get(); assert.equal(calls, 2)
+  f.advance(540_000); const expired = await f.service.get('manual')
+  assert.equal(expired.data, undefined); assert.equal(expired.fromCache, true); assert.equal(calls, 2)
+  f.advance(960_000); await f.service.get('manual'); assert.equal(calls, 3)
+})
+test('one reset never clears the other window during failure backoff', async t => {
+  let bad = false
+  const p = payload(); p.rate_limit.primary_window.reset_at = 1120
+  const f = fixture(t, async () => bad ? new Response('', { status: 429, headers: { 'retry-after': '600' } }) : json(p))
+  const first = await f.service.get(); assert.equal(first.nextCheckAt, 1_120_000)
+  f.advance(60_000); bad = true; await f.service.get('manual')
+  f.advance(60_000); const partial = await f.service.get()
+  assert.equal(partial.data.fiveHour, undefined); assert.equal(partial.data.fiveHourReason, 'expired'); assert.ok(partial.data.weekly)
+})
+test('manual and automatic requests join the same in-flight query', async t => {
+  const entered = deferred(), response = deferred(); let calls = 0
+  const f = fixture(t, async () => { calls++; entered.resolve(); return response.promise })
+  const auto = f.service.get(); await entered.promise
+  const manual = f.service.get('manual'); response.resolve(json(payload()))
+  assert.deepEqual(await manual, await auto); assert.equal(calls, 1)
 })
