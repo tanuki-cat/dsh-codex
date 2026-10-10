@@ -21,7 +21,15 @@ import { resolve } from 'node:path'
  * profile observes a settings write without a restart.
  */
 const root = process.env.DSH_INSTALL_ROOT
-const MODELS = ['gpt-5.3-codex-spark', 'gpt-5.5', 'gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol']
+/**
+ * Slugs the remote listing may propose, in preference order.
+ *
+ * Which of these the installed host already carries differs by generation —
+ * 0.2.1-alpha.2 ships gpt-6.1-sol natively where 0.2.1-alpha.1 does not — so
+ * the tests pick the first candidate absent from the live catalog rather than
+ * pinning one generation's baseline.
+ */
+const CANDIDATES = ['gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.3-sol']
 
 // The real adapter pulls the whole credentials module, so this resolves the
 // installed one rather than a stub; the plugin only needs its key grammar.
@@ -39,13 +47,20 @@ const remoteModel = (slug, other = {}) => ({
   supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }], ...other,
 })
 
-/** The upstream listing this account actually returns, trimmed to what the patch reads. */
-const listing = [
-  remoteModel('gpt-6.1-sol', { supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(effort => ({ effort })) }),
+/**
+ * The upstream listing this account actually returns, trimmed to what the patch
+ * reads. The entry the patch should propose is supplied by the caller, because
+ * a slug the installed host already carries leaves nothing to add.
+ */
+const listingFor = target => [
+  remoteModel(target, { supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].map(effort => ({ effort })) }),
   remoteModel('gpt-6-luna'),
   remoteModel('gpt-reserve', { visibility: 'hide' }),
   remoteModel('codex-auto-review', { visibility: 'hide' }),
 ]
+
+/** The first candidate the installed catalog does not already carry. */
+const targetFor = native => CANDIDATES.find(id => !native.includes(id))
 
 test('a patch accepted by the host schema registers through the real adapter and resolver', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to run against an installed DSH.',
@@ -71,9 +86,12 @@ test('a patch accepted by the host schema registers through the real adapter and
     await new Promise(done => setImmediate(done))
     await new Promise(done => setImmediate(done))
 
-    // Only the eight catalog models are offered before the patch.
-    assert.deepEqual((await ctx.llm.listModels('openai-codex')).map(m => m.id), MODELS)
-    await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', 'gpt-6.1-sol'),
+    // The installed catalog is the baseline; the added model is one the host
+    // does not already carry, so the premise holds on either generation.
+    const MODELS = (await ctx.llm.listModels('openai-codex')).map(m => m.id)
+    const target = targetFor(MODELS)
+    assert.ok(target, 'the listing offers a model the host lacks')
+    await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', target),
       (error) => error.code === 'UNKNOWN_MODEL', 'the target is unknown before the patch')
 
     const settings = {
@@ -103,14 +121,14 @@ test('a patch accepted by the host schema registers through the real adapter and
     const patches = createModelPatches(
       credentialContext,
       { settings, llm: { listModels: provider => ctx.llm.listModels(provider) } },
-      async () => new Response(JSON.stringify({ models: listing }), { status: 200 }),
+      async () => new Response(JSON.stringify({ models: listingFor(target) }), { status: 200 }),
       { host: () => loadHostCatalog(credentialContext), clientVersion: async () => ({ value: '0.160.1', source: 'builtin' }) },
     )
 
     // Preview reads the real runtime listing and proposes only the missing,
     // visible entry — the hidden ones stay out.
     const view = await patches.preview()
-    assert.deepEqual(view.added, ['gpt-6.1-sol'])
+    assert.deepEqual(view.added, [target])
     assert.deepEqual(view.preserved, MODELS)
     assert.equal(writes.length, 0, 'preview writes nothing')
 
@@ -118,7 +136,7 @@ test('a patch accepted by the host schema registers through the real adapter and
 
     // The composed entry keeps the capability fields the listing supplied.
     const written = writes[0]
-    const added = written.find(entry => entry.id === 'gpt-6.1-sol')
+    const added = written.find(entry => entry.id === target)
     assert.ok(added, 'the target was written')
     assert.equal(added.contextWindow, 272000)
     assert.deepEqual(added.input, ['image', 'text'])
@@ -129,9 +147,9 @@ test('a patch accepted by the host schema registers through the real adapter and
 
     // And the runtime observes it without a restart.
     const after = (await ctx.llm.listModels('openai-codex')).map(m => m.id)
-    assert.deepEqual(after, [...MODELS, 'gpt-6.1-sol'])
-    const info = await ctx.llm.resolveModelInfo('openai-codex', 'gpt-6.1-sol')
-    assert.equal(info.id, 'gpt-6.1-sol')
+    assert.deepEqual(after, [...MODELS, target])
+    const info = await ctx.llm.resolveModelInfo('openai-codex', target)
+    assert.equal(info.id, target)
     // The real resolver reports the capability it resolved from the entry.
     assert.equal(info.context.contextWindow, 272000)
     assert.deepEqual(info.inputModalities, ['image', 'text'])
@@ -145,12 +163,12 @@ test('a patch accepted by the host schema registers through the real adapter and
     assert.equal(writes.length, 1)
 
     const restore = await patches.restorePreview()
-    assert.deepEqual(restore.removed, ['gpt-6.1-sol'])
+    assert.deepEqual(restore.removed, [target])
     assert.equal((await patches.restore(restore.signature)).restored, true)
     assert.deepEqual((await ctx.llm.listModels('openai-codex')).map(model => model.id), MODELS)
     assert.equal(live['openai-codex'].reasoning, 'medium')
     assert.deepEqual(live['openai-codex'].models, [])
-    await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', 'gpt-6.1-sol'), error => error.code === 'UNKNOWN_MODEL')
+    await assert.rejects(ctx.llm.resolveModelInfo('openai-codex', target), error => error.code === 'UNKNOWN_MODEL')
   } finally {
     for (const fiber of fibers.reverse()) await fiber.dispose()
     hooks.deregister()
@@ -178,6 +196,12 @@ test('the host schema rejects sections it cannot express, and a refused write is
     await new Promise(done => setImmediate(done))
     await new Promise(done => setImmediate(done))
 
+    // The installed catalog is the baseline and the proposed model is one the
+    // host lacks, so the write below is a real patch on either generation.
+    const MODELS = (await ctx.llm.listModels('openai-codex')).map(m => m.id)
+    const target = targetFor(MODELS)
+    assert.ok(target, 'the listing offers a model the host lacks')
+
     // The schema is the host's own, so these refusals are the real contract a
     // composed patch has to satisfy — not a reimplementation of it.
     assert.throws(() => Config({ providers: { 'openai-codex': { models: [{ id: 'x', reasoningEfforts: { ultra: 'ultra' } }] } } }),
@@ -204,7 +228,7 @@ test('the host schema rejects sections it cannot express, and a refused write is
     const patches = createModelPatches(
       { credentials: { async readRecord() { return { kind: 'grant', payload: { access: 'a', refresh: 'r', accountId: 'account-1', expires: Date.now() + 3_600_000 } } } } },
       { settings, llm: { listModels: provider => ctx.llm.listModels(provider) } },
-      async () => new Response(JSON.stringify({ models: [remoteModel('gpt-6.1-sol')] }), { status: 200 }),
+      async () => new Response(JSON.stringify({ models: [remoteModel(target)] }), { status: 200 }),
     )
     const view = await patches.preview()
     await assert.rejects(patches.apply(view.signature), /SETTINGS_CONFLICT/, 'the refusal reaches the caller')

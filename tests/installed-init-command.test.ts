@@ -29,6 +29,10 @@ test('installed commands drive init in a separate real AgentLoop turn and preser
   const { LocalFileSystem } = await import('@deepseek-ai/dsh-fs-local')
   const observation = await import('@deepseek-ai/dsh-fs-observation-policy')
   const fsTools = await import('@deepseek-ai/dsh-tool-fs')
+  // 0.2.1-alpha.2 moved the working directory into its own service, which the
+  // fs tool suite now injects; without it the suite registers no tools at all.
+  // Absent on older hosts, where the suite took the directory from fs-local.
+  const workingDirectory = await import('@deepseek-ai/dsh-working-directory').then(module => module.default).catch(() => undefined)
   const instructions = await import('@deepseek-ai/dsh-agent-instructions')
   const { registerInitCommand } = await import('../lib/init-command.js')
   const { INIT_PROMPT } = await import('../lib/init-prompt.js')
@@ -48,6 +52,7 @@ test('installed commands drive init in a separate real AgentLoop turn and preser
   mount(SessionProjectionRegistry); mount(SessionStore); mount(AgentRegistry); mount(SystemPrompt)
   mount(ToolRuntime); mount(LlmRuntime); mount(CommandRuntime)
   fibers.push(ctx.plugin(LocalFileSystem, { cwd: directory }))
+  if (workingDirectory) fibers.push(ctx.plugin(workingDirectory, { defaultDirectory: directory }))
   mount(observation); mount(fsTools)
   fibers.push(ctx.plugin(instructions, { dshHome: join(directory, 'home'), maxBytes: 4096 }))
   fibers.push(ctx.plugin(AgentLoop, { agents: [] }))

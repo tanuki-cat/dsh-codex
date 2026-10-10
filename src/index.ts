@@ -36,7 +36,13 @@ export function apply(ctx: PluginContext) {
   ctx.inject(['tools', 'attachments', 'llm'], async services => { await registerImageTool(ctx, services) })
   let patches: ReturnType<typeof createModelPatches> | undefined
   ctx.inject(['settings', 'llm'], services => { patches = createModelPatches(ctx, services) })
-  ctx.inject(['webServer', 'webRuntime'], web => {
+  // Only webServer is required. Trust authorities moved between host
+  // generations — 0.2.1-alpha.2 dropped the webRuntime service that earlier
+  // hosts published them through — and Cordis keeps a fiber inactive while any
+  // declared dependency is missing. Declaring either trust source here would
+  // silently skip this registration on the host that dropped it, so the route
+  // stays registered and resolves its authority sources per request instead.
+  ctx.inject(['webServer'], web => {
     registerCodexManagement(web, createCodexManagement(ctx, paused => usage.setPaused(paused ?? false)), () => patches, usage)
   })
 }

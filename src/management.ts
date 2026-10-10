@@ -126,19 +126,71 @@ export function createCodexManagement(ctx: CodexContext, invalidateUsage: (pause
   }
 }
 
+/** One authority with IPv6 brackets and case removed, for comparison. */
+function bareAuthority(value: string) {
+  return value.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+}
+
+/** Whether one bind literal names every interface at once, which grants nothing. */
+export function isWildcardBind(host: string | undefined) {
+  if (host === undefined) return true
+  return ['', '0.0.0.0', '::', '::0.0.0.0', '::ffff:0.0.0.0'].includes(bareAuthority(host))
+}
+
+/**
+ * Read one optional host service without an inject requirement.
+ *
+ * `ctx.get` is the only safe read: a property access for an undeclared service
+ * throws on a real Cordis context. These services must not be declared either —
+ * a declared injection for one a host generation dropped keeps this route's
+ * fiber inactive instead of falling back to the surviving source.
+ */
+function readService<T>(ctx: WebContext, name: string): T | undefined {
+  if (typeof ctx.get === 'function') {
+    try { return ctx.get(name) as T | undefined } catch { return undefined }
+  }
+  try { return (ctx as unknown as Record<string, T | undefined>)[name] } catch { return undefined }
+}
+
+/**
+ * The authorities this deployment serves besides loopback.
+ *
+ * Host generations disagree on where that list lives, so every source is
+ * additive. Up to 0.2.1-alpha.1, `webRuntime` carries bind-time LAN literals and
+ * invocation authorities together. 0.2.1-alpha.2 dropped that service: it reads
+ * invocation authorities from `webStartup` and accepts the listener's own bind
+ * literal independently, so that literal is read here too — without it, a
+ * deployment bound to a LAN address would refuse its own browser. A wildcard
+ * bind grants nothing on either generation and is dropped rather than trusted.
+ * @param ctx - the plugin context carrying webServer and whichever trust source exists.
+ * @returns the accepted authorities and the bind literal, when it grants one.
+ */
+export function trustAuthorities(ctx: WebContext) {
+  const sources = [
+    readService<{ trustedHosts?: string[] }>(ctx, 'webRuntime')?.trustedHosts,
+    readService<{ trustedHosts?: string[] }>(ctx, 'webStartup')?.trustedHosts,
+  ]
+  const trustedHosts = sources
+    .flatMap(entries => Array.isArray(entries) ? entries : [])
+    .filter(entry => typeof entry === 'string')
+  const bindHost = isWildcardBind(ctx.webServer.host) ? undefined : ctx.webServer.host
+  return { trustedHosts, bindHost }
+}
+
 /**
  * Whether one request may reach a management route.
  *
  * Two independent proofs: a capability token the index injection handed this
- * browser, and an authority that is loopback or explicitly trusted. A page on
- * another origin cannot satisfy both, and a DNS-rebinding hostname fails the
- * authority check even when the token leaked.
+ * browser, and an authority the deployment serves. A page on another origin
+ * cannot satisfy both, and a DNS-rebinding hostname fails the authority check
+ * even when the token leaked.
  * @param req - the incoming request.
  * @param token - the capability this endpoint was registered with.
  * @param trustedHosts - additional authorities accepted beside loopback.
+ * @param bindHost - the listener's own bind literal, accepted on any port.
  * @returns whether the request is trusted.
  */
-export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, token: string, trustedHosts: readonly string[] = []) {
+export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, token: string, trustedHosts: readonly string[] = [], bindHost?: string) {
   const host = req.headers.host
   const authorization = req.headers['x-dsh-chatgpt-token']
   if (typeof host !== 'string' || typeof authorization !== 'string') return false
@@ -155,7 +207,9 @@ export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, 
       const value = new URL(`http://${entry}`)
       return value.port ? value.host === authority.host : value.hostname === authority.hostname
     })
-    if (!loopback && !trusted) return false
+    const bound = bindHost !== undefined && !isWildcardBind(bindHost)
+      && bareAuthority(bindHost) === bareAuthority(authority.hostname)
+    if (!loopback && !trusted && !bound) return false
     if (req.headers['sec-fetch-site'] === 'cross-site') return false
     const origin = req.headers.origin
     return origin === undefined || (typeof origin === 'string' && new URL(origin).host === authority.host)
@@ -167,7 +221,7 @@ export function trustedManagementRequest(req: Pick<IncomingMessage, 'headers'>, 
  *
  * Availability is checked per status request, so registration is independent
  * of whether llm-pi-ai mounted its flow before or after this plugin.
- * @param ctx - the plugin context carrying webServer and webRuntime.
+ * @param ctx - the plugin context carrying webServer and the host's trust sources.
  * @param manager - the codex management state machine.
  * @returns nothing; the endpoint and its index injection are owned by the caller's fiber.
  */
@@ -189,7 +243,9 @@ export function registerCodexManagement(ctx: WebContext, manager: ReturnType<typ
     res.setHeader('cache-control', 'no-store')
     res.setHeader('content-type', 'application/json; charset=utf-8')
     const reply = (code: number, value: unknown) => { res.writeHead(code); res.end(JSON.stringify(value)) }
-    if (!trustedManagementRequest(req, token, ctx.webRuntime.trustedHosts)) { reply(403, { error: 'Request refused.' }); return }
+    // Resolved per request so a late-mounted trust source is honored.
+    const { trustedHosts, bindHost } = trustAuthorities(ctx)
+    if (!trustedManagementRequest(req, token, trustedHosts, bindHost)) { reply(403, { error: 'Request refused.' }); return }
     const operation = new URL(req.url ?? '/', 'http://127.0.0.1').pathname.slice(path.length)
     if (operation === '/usage' && req.method === 'GET') {
       if (!usage) { reply(503, { error: 'Usage service unavailable.' }); return }

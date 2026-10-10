@@ -16,7 +16,10 @@ function installed() {
   return existsSync(manifest)
 }
 
-if (args.includes('--version')) console.log('0.2.0-rc.2')
+// The reported runtime version is overridable so an installer test can prove
+// which host versions the declared allowlist accepts. Default stays the oldest
+// declared version, keeping the unpinned tests on the narrowest supported host.
+if (args.includes('--version')) console.log(process.env.TEST_DSH_VERSION ?? '0.2.0-rc.2')
 else if (args.includes('--dump-config')) console.log(installed() ? 'name: dsh-llm-chatgpt' : 'name: prior-plugin')
 else if (args.includes('--dump-config-schema')) {
   const entries = [{ path: '/0', id: 'prior-plugin', name: 'prior-plugin', status: 'partial' }]

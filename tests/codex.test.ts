@@ -171,6 +171,9 @@ test('the credential record address matches the adapter contract', () => {
 test('codex management routes require the capability and expose the official sign-in', async () => {
   const world = host()
   let route, inject, cleanup
+  // A plain-object double, so this covers the property-read fallback that
+  // hosts without ctx.get go through. The generation-specific sources are read
+  // by trustAuthorities independently of that fallback.
   const web = {
     webRuntime: { trustedHosts: [] },
     webServer: { register(value) { route = value; return () => {} } },

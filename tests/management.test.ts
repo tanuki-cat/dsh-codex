@@ -11,7 +11,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   }
   return next(specifier, context)
 } })
-const { createCodexManagement, registerCodexManagement, trustedManagementRequest } = await import('../lib/management.js')
+const { createCodexManagement, registerCodexManagement, trustedManagementRequest, trustAuthorities } = await import('../lib/management.js')
 const { PatchError } = await import('../lib/model-patches.js')
 hooks.deregister()
 
@@ -20,6 +20,7 @@ test('usage route inherits capability checks without disposing the parent-owned 
   const manager = { async dispose() {}, async status() {}, async start() {}, async cancel() {}, async signOut() {} }
   const usage = { async get() { calls++; return { state: 'unavailable', reason: 'no-five-hour-window', nextCheckAt: 1000 } }, dispose() { disposed = true } }
   const ctx = { webRuntime: { trustedHosts: [] }, webServer: { register(value) { route = value; return () => {} } },
+    get(name) { return name === 'webRuntime' ? ctx.webRuntime : undefined },
     on(_event, callback) { inject = callback }, effect(callback) { cleanup = callback() } }
   registerCodexManagement(ctx, manager, undefined, usage)
   const scripts = []; inject(scripts)
@@ -48,6 +49,14 @@ test('management protects against wrong capability, cross-site origins and DNS r
   assert.equal(trustedManagementRequest(request('127.0.0.1', 'secret', undefined, 'cross-site'), 'secret'), false)
   assert.equal(trustedManagementRequest(request('192.168.1.2:8080'), 'secret', ['192.168.1.2:8080']), true)
   assert.equal(trustedManagementRequest(request('192.168.1.2:9090'), 'secret', ['192.168.1.2:8080']), false)
+  // The listener's own bind literal is a separate grant on the port it serves,
+  // and a wildcard bind grants nothing on any port.
+  assert.equal(trustedManagementRequest(request('192.168.1.2:8080'), 'secret', [], '192.168.1.2'), true)
+  assert.equal(trustedManagementRequest(request('192.168.1.2:9090'), 'secret', [], '192.168.1.2'), true)
+  assert.equal(trustedManagementRequest(request('192.168.1.3:8080'), 'secret', [], '192.168.1.2'), false)
+  assert.equal(trustedManagementRequest(request('192.168.1.2:8080'), 'secret', [], '0.0.0.0'), false)
+  assert.equal(trustedManagementRequest(request('example.internal:8080'), 'secret', [], '0.0.0.0'), false)
+  assert.equal(trustedManagementRequest(request('127.0.0.1:8080'), 'secret', [], '0.0.0.0'), true)
 })
 
 test('management routes require the injected capability and POST for state changes', async () => {
@@ -75,6 +84,7 @@ test('management routes require the injected capability and POST for state chang
   const web = {
     webRuntime: { trustedHosts: [] },
     webServer: { register(value) { route = value; return () => {} } },
+    get(name) { return name === 'webRuntime' ? web.webRuntime : undefined },
     on(_event, callback) { inject = callback },
     effect(callback) { cleanup = callback() },
   }
@@ -177,6 +187,7 @@ test('no route response or injected script ever carries the stored OAuth credent
   const web = {
     webRuntime: { trustedHosts: [] },
     webServer: { register(value) { route = value; return () => {} } },
+    get(name) { return name === 'webRuntime' ? web.webRuntime : undefined },
     on(_event, callback) { inject = callback },
     effect(callback) { cleanup = callback() },
   }
@@ -221,4 +232,27 @@ test('no route response or injected script ever carries the stored OAuth credent
   assert.match(received[0], /"token":"[a-f0-9]{64}"/)
   assert.doesNotMatch(received[0], /access|refresh/i)
   await cleanup()
+})
+test('trust sources are read from whichever service the host generation provides', () => {
+  // 0.2.1-alpha.2 dropped webRuntime: invocation authorities moved to
+  // webStartup and the listener's own bind literal became an independent
+  // grant. Reading only the old service would refuse a LAN-bound deployment
+  // its own browser.
+  const legacy = { webServer: { host: '127.0.0.1' }, webRuntime: { trustedHosts: ['legacy.internal'] },
+    get(name) { return name === 'webRuntime' ? legacy.webRuntime : undefined } }
+  // The bind literal is reported on every generation; loopback is redundant
+  // here (it already passes) but a concrete literal is still the listener's own.
+  assert.deepEqual(trustAuthorities(legacy), { trustedHosts: ['legacy.internal'], bindHost: '127.0.0.1' })
+
+  const current = { webServer: { host: '192.168.1.2' }, webStartup: { trustedHosts: ['deployed.internal'] },
+    get(name) { return name === 'webStartup' ? current.webStartup : undefined } }
+  assert.deepEqual(trustAuthorities(current), { trustedHosts: ['deployed.internal'], bindHost: '192.168.1.2' })
+
+  // A wildcard bind is not an authority, and a host publishing both keeps both.
+  const wildcard = { webServer: { host: '0.0.0.0' }, get() { return undefined } }
+  assert.deepEqual(trustAuthorities(wildcard), { trustedHosts: [], bindHost: undefined })
+
+  const both = { webServer: { host: '10.0.0.5' },
+    get(name) { return name === 'webRuntime' ? { trustedHosts: ['a.internal'] } : name === 'webStartup' ? { trustedHosts: ['b.internal'] } : undefined } }
+  assert.deepEqual(trustAuthorities(both), { trustedHosts: ['a.internal', 'b.internal'], bindHost: '10.0.0.5' })
 })

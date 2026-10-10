@@ -48,18 +48,20 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 ### 前置条件
 
 - Node.js `^22.19.0 || >=24.0.0`，与[包声明](<package.json>)一致。
-- 已安装 DSH 并有 `web` profile；本地安装脚本只接受声明的宿主版本 `0.2.0-rc.2` 或 `0.2.1-alpha.1`。真实 GUI 验收环境为 `0.2.1-alpha.1`，不据此承诺所有版本或平台兼容。
+- 已安装 DSH 并有 `web` profile；本地安装脚本只接受声明的宿主版本 `0.2.0-rc.2`、`0.2.1-alpha.1` 或 `0.2.1-alpha.2`。自动化已对 `0.2.1-alpha.1` 与 `0.2.1-alpha.2` 两代宿主分别验证；真实 GUI 验收环境为 `0.2.1-alpha.1`，不据此承诺所有版本或平台兼容。
 - 宿主挂载 `llm-pi-ai` 并提供 `openai-codex` 授权 flow；登录 UI 还需要 Web 服务和模型设置页。额度条要求模型目录、会话、连接服务及 `conversation.input.right` 槽位。
+
+登录端点只强制要求 `webServer`。可接受的信任来源随宿主版本迁移：`0.2.0-rc.2` 和 `0.2.1-alpha.1` 由 `webRuntime` 一并发布绑定期 LAN 地址与调用方声明的 `--trusted-host`；`0.2.1-alpha.2` 移除了 `webRuntime`，调用方声明改由 `webStartup` 提供，并独立接受监听地址本身。插件按请求读取现存来源，不把任一来源声明为注入依赖——声明被移除的那个会让该注册在其宿主上静默失效；通配绑定（`0.0.0.0`、`::`）不被当作任何地址的授权。
 
 ### 使用发布安装包
 
-从 [v0.3.13 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.13>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.13/dsh-llm-chatgpt-0.3.13.tgz>)，在下载目录执行：
+从 [v0.3.14 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.14>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.14/dsh-llm-chatgpt-0.3.14.tgz>)，在下载目录执行：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.14.tgz
 ```
 
-该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。`0.3.13` 提供项目规则初始化、任务折叠展示及独立版本配置；发布内容与验收边界见[发布说明](<docs/design-task-release-codex-init-0.3.13.md>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。`0.3.14` 兼容 DSH `0.2.1-alpha.2`，同时保留 `0.2.0-rc.2` 与 `0.2.1-alpha.1`；`0.3.13` 提供的项目规则初始化、任务折叠展示及独立版本配置见[发布说明](<docs/design-task-release-codex-init-0.3.13.md>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
 
 安装后重启对应 DSH Web 进程并重新加载页面，加载新的服务端命令与客户端卡片；不能仅靠浏览器刷新更新服务端插件。升级自开发版同样需要安装正式包。
 
@@ -80,7 +82,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.14.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -123,13 +125,13 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 ## 项目规则 init 命令
 
-此功能包含在正式版 `0.3.13`，既有正式版 `0.3.12` 不包含。只构建本仓库不会更新运行中的插件；安装测试包后需重启承载插件的 DSH 进程并刷新页面。
+此功能包含在正式版 `0.3.13` 及以后，`0.3.12` 不包含。只构建本仓库不会更新运行中的插件；安装测试包后需重启承载插件的 DSH 进程并刷新页面。
 
-在对话输入框提交无参数命令 `/init`，当前会话 Agent 会检查项目并生成当前文件系统工作目录下的 AGENTS.md。不接受附件，不启动外部 Codex CLI，也不写固定模板。需要宿主提供 commands 与 followup 消息能力；已核对 DSH 0.2.1-alpha.1。无需为初始化任务切换到 Codex 模型，但会使用当前模型并消耗其额度。
+在对话输入框提交无参数命令 `/init`，当前会话 Agent 会检查项目并生成当前文件系统工作目录下的 AGENTS.md。不接受附件，不启动外部 Codex CLI，也不写固定模板。需要宿主提供 commands 与 followup 消息能力；已核对 DSH 0.2.1-alpha.1 与 0.2.1-alpha.2。无需为初始化任务切换到 Codex 模型，但会使用当前模型并消耗其额度。
 
 命令回执只表示任务已提交。运行中任务结束后，初始化在独立回合执行；取消或卸载发生在消息准备期间时不会晚到投递。投递后的取消由正常会话取消机制管理，不保证撤回已经完成的写入。
 
-当前源码将初始化指令显示为宿主原生、默认折叠的任务触发通知，不再作为大段普通用户气泡。点击通知可查看完整指令；模型仍收到原文，会话日志也保留原文，工具执行与最终结果正常展示。这不是模型思考内容，通知标题由宿主提供。该展示已在 DSH 0.2.1-alpha.1 的客户端函数中验证；旧宿主展示以其能力为准。正式版 `0.3.13` 包含此展示；升级安装后须重启承载插件的 DSH 进程并刷新页面，单独刷新浏览器不足以更新服务端消息来源。旧历史气泡保留原有展示，不修改既有日志。
+当前源码将初始化指令显示为宿主原生、默认折叠的任务触发通知，不再作为大段普通用户气泡。点击通知可查看完整指令；模型仍收到原文，会话日志也保留原文，工具执行与最终结果正常展示。这不是模型思考内容，通知标题由宿主提供。该展示已在 DSH 0.2.1-alpha.1 与 0.2.1-alpha.2 的客户端函数中验证；旧宿主展示以其能力为准。正式版 `0.3.13` 包含此展示；升级安装后须重启承载插件的 DSH 进程并刷新页面，单独刷新浏览器不足以更新服务端消息来源。旧历史气泡保留原有展示，不修改既有日志。
 
 - 目标是当前会话目录，不是 DSH 服务进程目录；从仓库子目录执行不会自动写到 Git 根目录。
 - 已有 AGENTS.md 保留不改。存在或创建冲突时停止，不读取后覆盖重试；权限、plan mode 和 sandbox 限制不得绕过。
@@ -138,7 +140,7 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 ## Codex 内置版本配置
 
-正式版 `0.3.13` 提供此配置，旧版插件不会因为添加 JSON 文件而支持它。[内置配置](<config/codex.json>)作为独立文件随包分发，当前内容为：
+正式版 `0.3.13` 及以后提供此配置，更早的插件不会因为添加 JSON 文件而支持它。[内置配置](<config/codex.json>)作为独立文件随包分发，当前内容为：
 
 ```json
 {
@@ -179,12 +181,12 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 下载正式安装包后安装：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.14.tgz
 ```
 
 安装前备份 Web profile 配置，安装后重启原 DSH Web 进程并刷新页面。本文未执行该安装命令或真实图片请求。
 
-宿主需提供兼容的公开工具、附件和模型路由服务；已核对版本为 `0.2.1-alpha.1`。当前模型必须明确支持图片输入，账号还须有 Codex 图片端点权限和额度。普通模型可用不代表图片接口可用。缺少可选服务时，图片工具不注册，不影响登录、模型补丁和用量查询。
+宿主需提供兼容的公开工具、附件和模型路由服务；已核对版本为 `0.2.1-alpha.1` 与 `0.2.1-alpha.2`。当前模型必须明确支持图片输入，账号还须有 Codex 图片端点权限和额度。普通模型可用不代表图片接口可用。缺少可选服务时，图片工具不注册，不影响登录、模型补丁和用量查询。
 
 在会话中提出“生成一张图片”或“生成透明背景图片”，模型可调用 `image_gen`。工具只接受非空 `prompt`（最多 32,000 字符）和可选布尔值 `transparent_background`（默认 `false`）；固定使用 `gpt-image-2`，尺寸和质量均为 `auto`。不支持编辑图片、多图生成、任意保存路径或精确尺寸保证。
 

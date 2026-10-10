@@ -37,15 +37,13 @@ test('installed DSH accepts the openai-codex management surface when llm-pi-ai o
     constructor(ctx) { super(ctx, 'webServer') }
     register(route) { routes.set(route.path, route); return () => routes.delete(route.path) }
   }
-  class WebRuntime extends Service {
-    constructor(ctx) { super(ctx, 'webRuntime') }
-    trustedHosts = []
-  }
 
   const ctx = new Context()
   const fibers = []
   try {
-    for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer, WebRuntime]) fibers.push(ctx.plugin(service))
+    // No trust service is mounted: 0.2.1-alpha.2 dropped webRuntime, so the
+    // surface must register with webServer alone.
+    for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer]) fibers.push(ctx.plugin(service))
     // Service fibers activate asynchronously; the registry is only reachable
     // once the authorization service has settled.
     await new Promise(resolve => setImmediate(resolve))
@@ -91,14 +89,11 @@ test('installed DSH registers the surface before its authorization flow', {
     constructor(ctx) { super(ctx, 'webServer') }
     register(route) { routes.set(route.path, route); return () => routes.delete(route.path) }
   }
-  class WebRuntime extends Service {
-    constructor(ctx) { super(ctx, 'webRuntime') }
-    trustedHosts = []
-  }
   const ctx = new Context()
   const fibers = []
   try {
-    for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer, WebRuntime]) fibers.push(ctx.plugin(service))
+    // webRuntime is deliberately absent, as on 0.2.1-alpha.2.
+    for (const service of [LlmRuntime, MemoryCredentials, AuthorizationService, MemoryWebServer]) fibers.push(ctx.plugin(service))
     fibers.push(ctx.plugin(plugin, {}))
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(routes.size, 1)

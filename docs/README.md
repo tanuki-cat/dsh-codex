@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.13`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.13>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
+当前包版本为 `0.3.14`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.14>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
 
 ## 目录
 
@@ -33,6 +33,7 @@ kind: "reference"
 
 | 文档 | 对应版本与用途 |
 | --- | --- |
+| [DSH alpha.2 兼容发布说明](<design-task-release-codex-alpha2-compat-0.3.14.md>) | 0.3.14 的 `webRuntime` 移除适配、信任来源迁移与两代宿主验证边界。 |
 | [init 与独立版本配置发布说明](<design-task-release-codex-init-0.3.13.md>) | 0.3.13 的发布内容、安装步骤、用户反馈和自动化验证边界。 |
 | [模型补丁审查处理记录](<design-task-fix-codex-model-patch-review-0.3.9.md>) | 0.3.9 的逐项修复、风险缓解与未验证项；替代 0.3.8 方案作为该版本处理依据。 |
 | [5 小时额度条发布说明](<design-task-release-codex-five-hour-usage-0.3.10.md>) | 0.3.10 的发布内容、GUI 样例和已执行/未执行验收。 |

@@ -148,3 +148,16 @@ test('installer leaves a profile with no plugin entry untouched', () => {
   assert.doesNotMatch(result.stdout, /已移除/)
   assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), before)
 })
+test('installer accepts every declared host generation and refuses an undeclared one', () => {
+  const versions = ['0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2']
+  for (const runtime of versions) {
+    const current = fixture()
+    const result = current.run({ TEST_DSH_VERSION: runtime })
+    assert.equal(result.status, 0, runtime + ': ' + result.stderr)
+    assert.doesNotMatch(result.stderr, /插件未声明支持本机 DSH/)
+  }
+  const unverified = fixture()
+  const refused = unverified.run({ TEST_DSH_VERSION: '0.3.0-alpha.1' })
+  assert.equal(refused.status, 1)
+  assert.match(refused.stderr, /插件未声明支持本机 DSH 0\.3\.0-alpha\.1/)
+})

@@ -36,13 +36,16 @@ function context({ flow = true } = {}) {
         assert.deepEqual(dependencies, ['settings', 'llm'])
         return
       }
-      assert.deepEqual(dependencies, ['webServer', 'webRuntime'])
+      assert.deepEqual(dependencies, ['webServer'])
       callback(ctx)
     },
     on() {},
     effect() {},
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
-    webRuntime: { trustedHosts: [] },
+    // Only the generation-agnostic seams. A host that dropped webRuntime must
+    // still reach the endpoint, so this double omits it deliberately; the
+    // management tests cover each trust source on its own.
+    get() { return undefined },
   }
   return { ctx, routes }
 }
@@ -74,7 +77,7 @@ test('optional command shares parent service and survives web scope disposal', a
     inject(dependencies, callback) {
       if (dependencies[0] === 'settings' || dependencies[0] === 'tools') return
       if (dependencies[0] === 'commands') { callback({ effect(fn) { commandCleanups.push(fn()) }, commands: { register(value) { definitions.set(value.name, value); const dispose = () => definitions.delete(value.name); commandCleanups.push(dispose); return dispose } } }); return }
-      callback({ webServer: { register() { return () => {} } }, webRuntime: { trustedHosts: [] }, on() {}, effect(fn) { webCleanups.push(fn()) } })
+      callback({ webServer: { register() { return () => {} } }, get() { return undefined }, on() {}, effect(fn) { webCleanups.push(fn()) } })
     } }
   apply(ctx)
   t.after(async () => { for (const cleanup of webCleanups) await cleanup(); for (const cleanup of commandCleanups) await cleanup(); for (const cleanup of parentCleanups) await cleanup() })
@@ -89,4 +92,23 @@ test('optional command shares parent service and survives web scope disposal', a
   assert.match((await init.handler({ ...args, agent: { followup() { assert.fail('disposed init') } } })).text, /已卸载/)
   await parentCleanups[0]()
   assert.match((await definition.handler(args)).text, /额度服务不可用/)
+})
+test('plugin registers without any host trust service beside webServer', () => {
+  // 0.2.1-alpha.2 dropped webRuntime. Declaring it would keep this fiber
+  // inactive on that host and silently drop the sign-in endpoint, so the
+  // registration must not depend on either trust service existing.
+  const routes = new Map()
+  const ctx = {
+    credentials: {}, authorization: { describe() { return undefined } },
+    inject(dependencies, callback) {
+      // The plugin also registers command, tool, settings and image scopes;
+      // only the web scope is under test here.
+      if (dependencies[0] !== 'webServer') return
+      callback(ctx)
+    },
+    on() {}, effect() {},
+    webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
+  }
+  apply(ctx)
+  assert.ok(routes.has('/chatgpt-management/openai-codex'))
 })

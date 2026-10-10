@@ -12,9 +12,28 @@ export interface CodexContext {
   credentials: Pick<CredentialProvider, 'readRecord' | 'deleteRecord'> & Partial<Pick<CredentialProvider, 'modifyRecord'>>
 }
 
+/**
+ * The web services one sign-in surface needs, across host generations.
+ *
+ * Trust authorities moved: 0.2.0-rc.2 and 0.2.1-alpha.1 publish bind-time LAN
+ * literals and invocation authorities through `webRuntime`, while
+ * 0.2.1-alpha.2 dropped that service — it reads invocation authorities from
+ * `webStartup` and accepts the listener's own bind address separately. Every
+ * source is optional here and read through {@link trustAuthorities}, so a host
+ * that dropped one still reaches the endpoint.
+ */
 export interface WebContext {
-  webServer: { register(route: { kind: 'prefix'; path: string; handler(req: IncomingMessage, res: ServerResponse): Promise<void> }): () => void }
-  webRuntime: { trustedHosts: string[] }
+  webServer: {
+    register(route: { kind: 'prefix'; path: string; handler(req: IncomingMessage, res: ServerResponse): Promise<void> }): () => void
+    /** The configured bind address; alpha.2 accepts it beside this list. */
+    host?: string
+  }
+  /** Bind-time LAN literals plus invocation authorities; absent from alpha.2 on. */
+  webRuntime?: { trustedHosts: string[] }
+  /** Invocation authorities; the surviving source on alpha.2. */
+  webStartup?: { trustedHosts: string[] }
+  /** Cordis service read without an inject requirement; absent on host doubles. */
+  get?(name: string): unknown
   on(event: 'webserver/index-inject', callback: (table: Array<{ kind: 'script'; placement: 'head'; text: string }>) => void): void
   effect(factory: () => () => Promise<void> | void, label: string): void
 }
