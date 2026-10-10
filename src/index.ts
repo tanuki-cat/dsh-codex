@@ -16,6 +16,7 @@ import { createCodexManagement, registerCodexManagement } from './management.js'
 import { createModelPatches } from './model-patches.js'
 import { createUsageService } from './usage.js'
 import { registerUsageCommand } from './usage-command.js'
+import { registerInitCommand } from './init-command.js'
 import { registerImageTool } from './image-tool.js'
 import type { PluginContext } from './types.js'
 
@@ -28,7 +29,10 @@ export function apply(ctx: PluginContext) {
   // offers the flow.
   const usage = createUsageService(ctx)
   ctx.effect(() => () => usage.dispose(), 'codex usage service')
-  ctx.inject(['commands'], commands => { registerUsageCommand(commands, usage) })
+  ctx.inject(['commands'], commands => {
+    registerUsageCommand(commands, usage)
+    registerInitCommand(commands)
+  })
   ctx.inject(['tools', 'attachments', 'llm'], async services => { await registerImageTool(ctx, services) })
   let patches: ReturnType<typeof createModelPatches> | undefined
   ctx.inject(['settings', 'llm'], services => { patches = createModelPatches(ctx, services) })

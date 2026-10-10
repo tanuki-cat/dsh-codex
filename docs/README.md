@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.12`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.12>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
+当前包版本为 `0.3.13`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.13>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
 
 ## 目录
 
@@ -24,6 +24,8 @@ kind: "reference"
 - [Codex 5 小时额度条](<../README.md#codex-5-小时额度条>)：剩余显示、五分钟轮询、旧数据与显示条件。
 - [usage 命令与剩余额度实施方案](<design-task-feature-codex-usage-command.md>)：双窗口查询、五分钟轮询及本次实施验收记录。
 - [图片生成工具实施方案](<design-task-feature-codex-image-generation-tool.md>)：已实现首版；复用 ChatGPT 凭据、独立图片接口、附件展示及待完成的真实环境验收。
+- [init 与内置版本配置实施方案](<design-task-feature-codex-init-and-version-config.md>)：原始实施基线；当前发布与用户验收反馈见 0.3.13 发布说明。
+- [init 任务展示](<../README.md#项目规则-init-命令>)：当前源码复用宿主折叠通知，完整指令保留，旧历史不迁移；包含在正式版 `0.3.13`；用户已报告测试完成，验收边界见发布说明。
 - [验证范围](<../README.md#验证范围>)：自动化测试、宿主集成及真实环境验收边界。
 - [更新日志](<../CHANGELOG.md>)：版本功能和对应验证记录。
 
@@ -31,6 +33,7 @@ kind: "reference"
 
 | 文档 | 对应版本与用途 |
 | --- | --- |
+| [init 与独立版本配置发布说明](<design-task-release-codex-init-0.3.13.md>) | 0.3.13 的发布内容、安装步骤、用户反馈和自动化验证边界。 |
 | [模型补丁审查处理记录](<design-task-fix-codex-model-patch-review-0.3.9.md>) | 0.3.9 的逐项修复、风险缓解与未验证项；替代 0.3.8 方案作为该版本处理依据。 |
 | [5 小时额度条发布说明](<design-task-release-codex-five-hour-usage-0.3.10.md>) | 0.3.10 的发布内容、GUI 样例和已执行/未执行验收。 |
 | [usage 命令与卡片发布说明](<design-task-release-codex-usage-0.3.11.md>) | 0.3.11 的双窗口命令、剩余三色进度、五分钟轮询和验证边界。 |

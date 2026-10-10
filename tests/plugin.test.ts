@@ -68,20 +68,25 @@ test('plugin registers management independently of authorization flow order', ()
 })
 
 test('optional command shares parent service and survives web scope disposal', async t => {
-  const parentCleanups = [], webCleanups = []; let definition
+  const parentCleanups = [], webCleanups = [], commandCleanups = []; const definitions = new Map()
   const ctx = { credentials: { async readRecord() { return undefined } }, authorization: { cancel() {}, describe() { return undefined } },
     effect(fn) { parentCleanups.push(fn()) },
     inject(dependencies, callback) {
       if (dependencies[0] === 'settings' || dependencies[0] === 'tools') return
-      if (dependencies[0] === 'commands') { callback({ commands: { register(value) { definition = value; return () => {} } } }); return }
+      if (dependencies[0] === 'commands') { callback({ effect(fn) { commandCleanups.push(fn()) }, commands: { register(value) { definitions.set(value.name, value); const dispose = () => definitions.delete(value.name); commandCleanups.push(dispose); return dispose } } }); return }
       callback({ webServer: { register() { return () => {} } }, webRuntime: { trustedHosts: [] }, on() {}, effect(fn) { webCleanups.push(fn()) } })
     } }
   apply(ctx)
-  t.after(async () => { for (const cleanup of webCleanups) await cleanup(); for (const cleanup of parentCleanups) await cleanup() })
-  assert.equal(definition.name, 'usage')
+  t.after(async () => { for (const cleanup of webCleanups) await cleanup(); for (const cleanup of commandCleanups) await cleanup(); for (const cleanup of parentCleanups) await cleanup() })
+  assert.deepEqual([...definitions.keys()], ['usage', 'init'])
+  const definition = definitions.get('usage'), init = definitions.get('init')
   const args = { rawInput: '', signal: new AbortController().signal }
   await webCleanups[0]()
   assert.match((await definition.handler(args)).text, /未登录/)
+  assert.equal((await init.handler({ ...args, agent: {} })).kind, 'error')
+  for (const cleanup of commandCleanups) await cleanup()
+  assert.equal(definitions.size, 0)
+  assert.match((await init.handler({ ...args, agent: { followup() { assert.fail('disposed init') } } })).text, /已卸载/)
   await parentCleanups[0]()
   assert.match((await definition.handler(args)).text, /额度服务不可用/)
 })

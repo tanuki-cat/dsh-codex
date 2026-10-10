@@ -455,3 +455,22 @@ test('oversized explicit context is reported without overriding the user choice'
   await patches.apply(preview.signature)
   assert.equal(settings.route.models[0].contextWindow, 872000)
 })
+
+test('version configuration refusal prevents auth and remote work but native restoration remains available', async () => {
+  const { CodexVersionConfigError } = await import('../lib/codex-config.js')
+  const { ctx, settings, llm } = fixture({ configured: { models: [{ id: 'custom' }] } })
+  const patches = createModelPatches(ctx, { settings, llm }, async () => assert.fail('no remote request'), {
+    clientVersion: async () => { throw new CodexVersionConfigError('/test/codex.json') },
+    host: async () => ({ models: [{ id: 'native' }], refreshCredential() { assert.fail('no refresh') } }),
+  })
+  await assert.rejects(patches.preview(), { reason: 'version-config-invalid' })
+  await assert.rejects(patches.apply('a'.repeat(64)), { reason: 'version-config-invalid' })
+  assert.deepEqual(settings.route.models, [{ id: 'custom' }])
+  assert.deepEqual((await patches.fallback('version-config-invalid')).added, [])
+  const restored = await patches.restorePreview()
+  const result = await createModelPatches(ctx, { settings, llm: { async listModels() { return settings.route.models.length ? settings.route.models : [{ id: 'native' }] } } }, async () => assert.fail('no remote request'), {
+    clientVersion: async () => { throw new CodexVersionConfigError('/test/codex.json') },
+    host: async () => ({ models: [{ id: 'native' }] }),
+  }).restore(restored.signature)
+  assert.equal(result.restored, true)
+})

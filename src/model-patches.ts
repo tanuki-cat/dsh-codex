@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { CODEX_KEY, CODEX_PROVIDER, CODEX_SETTINGS_NS } from './codex.js'
 import type { CodexContext } from './types.js'
-import { CODEX_CLIENT_VERSION, loadHostCatalog, resolveClientVersion } from './host-catalog.js'
+import { getCodexClientVersion, loadHostCatalog, resolveClientVersion } from './host-catalog.js'
 import type { ClientVersion, HostCatalog } from './host-catalog.js'
-export { CODEX_CLIENT_VERSION } from './host-catalog.js'
+export { getCodexClientVersion } from './host-catalog.js'
 const SOURCE = 'https://chatgpt.com/backend-api/codex/models'
 const MAX_BYTES = 4 * 1024 * 1024
 const LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
@@ -23,6 +23,7 @@ export type PatchReason =
   | 'credential-expired'
   | 'credential-incomplete'
   | 'source-unavailable'
+  | 'version-config-invalid'
   | 'config-unmergeable'
   | 'conflict'
   | 'registration-unconfirmed'
@@ -113,7 +114,7 @@ export function parseRemoteCatalog(value: unknown) {
 }
 
 /** Bounded read: a response with private instructions must not reach the browser. */
-export async function fetchCodexCatalog(access: string, accountId: string | undefined, fetcher: typeof fetch = fetch, clientVersion = CODEX_CLIENT_VERSION) {
+export async function fetchCodexCatalog(access: string, accountId: string | undefined, fetcher: typeof fetch = fetch, clientVersion = getCodexClientVersion()) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 7000)
   try {
@@ -197,6 +198,7 @@ export function createModelPatches(ctx: CodexContext, services: PatchServices, f
     // Local refusals are decided before the network: a section that cannot
     // accept the patch must not cost a request to discover.
     const { entry, explicit } = descriptor(services.settings)
+    const requestedVersion = await clientVersion()
     const native = await host()
     let record = await ctx.credentials.readRecord(CODEX_KEY)
     let grant = record?.kind === 'grant' ? object(record.payload) : undefined
@@ -210,7 +212,6 @@ export function createModelPatches(ctx: CodexContext, services: PatchServices, f
     if (typeof grant?.access !== 'string' || !positive(grant.expires) || (grant.expires as number) <= Date.now()) throw new PatchError('credential-expired', 'Sign in to ChatGPT or refresh the expired credential first.')
     const accountId = typeof grant.accountId === 'string' && grant.accountId.length > 0 ? grant.accountId : undefined
     if (!accountId) throw new PatchError('credential-incomplete', 'Codex credential has no account ID; sign in again.')
-    const requestedVersion = await clientVersion()
     const catalog = await fetchCodexCatalog(grant.access, accountId, fetcher, requestedVersion.value)
     const current = await services.llm.listModels(CODEX_PROVIDER)
     const currentIds = new Set(current.map(model => model.id))

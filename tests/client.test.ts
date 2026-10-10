@@ -653,6 +653,7 @@ test('each refusal reason renders its own remedy instead of a generic failure', 
     ['route-missing', '尚未声明 openai-codex 路由'],
     ['settings-read-only', '只读，无法写入补丁'],
     ['source-unavailable', '无法获取 Codex 模型列表'],
+    ['version-config-invalid', 'config/codex.json 并重启 DSH'],
     ['conflict', '请重新预览后再确认'],
   ]
   for (const [reason, expected] of cases) {
@@ -667,7 +668,7 @@ test('each refusal reason renders its own remedy instead of a generic failure', 
 })
 
 test('HTTP 200 fallback renders its specific remedy and never offers confirmation', async () => {
-  for (const [reason, expected] of [['route-missing', '尚未声明'], ['settings-read-only', '只读'], ['credential-expired', '凭据已过期'], ['source-unavailable', '无法获取']]) {
+  for (const [reason, expected] of [['route-missing', '尚未声明'], ['settings-read-only', '只读'], ['credential-expired', '凭据已过期'], ['source-unavailable', '无法获取'], ['version-config-invalid', 'config/codex.json 并重启 DSH']]) {
     const api = host({ status: { ...connected, patchAvailable: true }, preview: {
       unavailable: 'remote unavailable', reason, added: [], preserved: ['old'], total: 1, unsupported: 0, signature: '', source: 'fallback',
     } })

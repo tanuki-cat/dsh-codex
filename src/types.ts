@@ -4,6 +4,7 @@ import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { AuthorizationNotice } from '@deepseek-ai/dsh-authorization/types'
 import type { PatchServices } from './model-patches.js'
 import type { UsageCommandServices } from './usage-command.js'
+import type { InitCommandServices } from './init-command.js'
 import type { ImageToolServices } from './image-tool.js'
 
 export interface CodexContext {
@@ -20,7 +21,7 @@ export interface WebContext {
 
 export interface PluginContext extends CodexContext {
   effect(factory: () => () => Promise<void> | void, label: string): void
-  inject(services: string[], callback: (context: WebContext & PatchServices & UsageCommandServices & ImageToolServices) => Promise<void> | void): void
+  inject(services: string[], callback: (context: WebContext & PatchServices & UsageCommandServices & InitCommandServices & ImageToolServices) => Promise<void> | void): void
 }
 
 export interface ManagementState {

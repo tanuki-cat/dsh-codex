@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process'
+import { CODEX_VERSION_PATTERN as VERSION, getCodexClientVersion } from './codex-config.js'
+import type { CodexVersionConfig } from './codex-config.js'
 import { resolve } from 'import-meta-resolve'
 import { CODEX_KEY, CODEX_PROVIDER } from './codex.js'
 import type { CodexContext } from './types.js'
@@ -86,14 +88,15 @@ export function bindHostCatalog(ctx: CodexContext, pi: PiModule, provider: Provi
 }
 
 export type ClientVersion = { value: string; source: 'environment' | 'codex-cli' | 'builtin' }
-export const CODEX_CLIENT_VERSION = '0.160.1'
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+export { getCodexClientVersion } from './codex-config.js'
 
 /** A bounded CLI probe; a validated environment override can pin a known contract. */
 export async function resolveClientVersion(
   override: string | null = process.env.DSH_CODEX_CLIENT_VERSION ?? null,
   probe = () => new Promise<string>((resolve, reject) => execFile('codex', ['--version'], { timeout: 1500, maxBuffer: 4096 }, (error, stdout) => error ? reject(error) : resolve(stdout))),
+  configuration?: CodexVersionConfig,
 ): Promise<ClientVersion> {
+  const builtin = getCodexClientVersion(configuration)
   if (override !== null) {
     if (override.length > 64 || !VERSION.test(override)) throw new Error('DSH_CODEX_CLIENT_VERSION must be a semantic version.')
     return { value: override, source: 'environment' }
@@ -102,5 +105,5 @@ export async function resolveClientVersion(
     const match = /^codex(?:-cli)?\s+(\S+)\s*$/.exec((await probe()).trim())
     if (match && VERSION.test(match[1])) return { value: match[1], source: 'codex-cli' }
   } catch { /* An absent or unavailable CLI leaves the tested request contract in place. */ }
-  return { value: CODEX_CLIENT_VERSION, source: 'builtin' }
+  return { value: builtin, source: 'builtin' }
 }

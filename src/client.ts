@@ -29,7 +29,7 @@ type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; er
 type Connection = { path: string; token: string }
 type PatchReason = 'settings-unavailable' | 'settings-read-only' | 'route-missing' | 'sign-in-required'
   | 'credential-expired' | 'credential-incomplete' | 'source-unavailable' | 'config-unmergeable'
-  | 'conflict' | 'registration-unconfirmed' | 'native-catalog-unavailable'
+  | 'conflict' | 'registration-unconfirmed' | 'native-catalog-unavailable' | 'version-config-invalid'
 type PatchPreview = {
   added: string[]
   preserved: string[]
@@ -174,6 +174,7 @@ window.__ModuleLoader__.load({
         patchOverstated: '显式上下文大于远端默认窗口（保留已有配置；若非有意覆盖，请检查模型设置或恢复原生目录）',
         patchOutputDefaults: '以下模型未提供输出上限，使用宿主默认值', patchWindows: '上下文窗口 / 最大配置覆盖上限',
         reasonNative: '无法读取已安装的原生目录，未修改显式模型列表。',
+        reasonVersionConfig: '插件内置版本配置无效。请修复插件安装目录中的 config/codex.json 并重启 DSH；未修改模型。',
         reasonSettingsUnavailable: '模型设置服务不可用。', reasonSettingsReadOnly: '模型设置为只读，无法写入补丁。', reasonRouteMissing: '尚未声明 openai-codex 路由；请先在模型页用「从目录添加」声明它。', reasonSignIn: '请先登录 ChatGPT。', reasonExpired: '凭据已过期，请重新登录或等待刷新后重试。', reasonIncomplete: '凭据缺少 account ID，请重新登录。', reasonSource: '无法获取 Codex 模型列表（网络或接口不可用），未写入任何模型。', reasonConfig: '现有模型配置无法安全合并，未做改动。', reasonConflict: '模型来源或配置已变化，请重新预览后再确认。', reasonRegistration: '配置已写入，但模型未能注册；请检查宿主设置。',
       },
       en: {
@@ -193,6 +194,7 @@ window.__ModuleLoader__.load({
         patchOverstated: 'Explicit context exceeds the remote default (preserved; if unintended, review model settings or restore the native catalog)',
         patchOutputDefaults: 'These models omit an output limit and use the host default', patchWindows: 'Context window / maximum configuration override',
         reasonNative: 'The installed native catalog cannot be read. Explicit models were not changed.',
+        reasonVersionConfig: 'The plugin version configuration is invalid. Repair config/codex.json in the plugin installation and restart DSH. Models were not changed.',
         reasonSettingsUnavailable: 'The model settings service is unavailable.', reasonSettingsReadOnly: 'Model settings are read-only, so no patch can be written.', reasonRouteMissing: 'The openai-codex route is not declared yet; add it from the catalog on the Models page first.', reasonSignIn: 'Sign in to ChatGPT first.', reasonExpired: 'The credential expired. Sign in again, or retry after it refreshes.', reasonIncomplete: 'The credential has no account ID. Sign in again.', reasonSource: 'The Codex model listing could not be retrieved (network or endpoint). No model was added.', reasonConfig: 'The existing model configuration cannot be safely merged; nothing was changed.', reasonConflict: 'The model source or configuration changed. Preview again before confirming.', reasonRegistration: 'The configuration was saved, but the models did not register. Check the host settings.',
       },
     }
@@ -339,6 +341,7 @@ window.__ModuleLoader__.load({
       'credential-expired': 'reasonExpired',
       'credential-incomplete': 'reasonIncomplete',
       'source-unavailable': 'reasonSource',
+      'version-config-invalid': 'reasonVersionConfig',
       'config-unmergeable': 'reasonConfig',
       'conflict': 'reasonConflict',
       'registration-unconfirmed': 'reasonRegistration',

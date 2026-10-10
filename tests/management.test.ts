@@ -131,6 +131,8 @@ test('management routes require the injected capability and POST for state chang
   for (const [reason, code, operation, method] of [
     ['route-missing', 200, '/models-preview', 'GET'],
     ['settings-read-only', 200, '/models-preview', 'GET'],
+    ['version-config-invalid', 200, '/models-preview', 'GET'],
+    ['version-config-invalid', 400, '/models-apply', 'POST'],
     ['registration-unconfirmed', 400, '/models-apply', 'POST'],
     ['conflict', 409, '/models-apply', 'POST'],
     ['conflict', 409, '/models-restore', 'POST'],
@@ -140,6 +142,10 @@ test('management routes require the injected capability and POST for state chang
     const answer = await request(operation, method, token, 'a'.repeat(64))
     assert.equal(answer.code, code, reason)
     assert.equal(answer.body.reason, reason, reason)
+    if (reason === 'version-config-invalid') {
+      assert.doesNotMatch(JSON.stringify(answer.body), /private.install|private-json-value/)
+      if (method === 'POST') assert.match(answer.body.error, /config.codex.json.*restart DSH/)
+    }
     // A refusal never proposes an addition, whichever layer reported it.
     assert.ok(!answer.body.added || answer.body.added.length === 0, reason)
   }

@@ -8,6 +8,7 @@
  * @module dsh-llm-chatgpt/management
  */
 import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { CodexVersionConfigError } from './codex-config.js'
 import { CODEX_KEY, CODEX_PROVIDER, beginCodexLogin, codexFlow, forgetCodexLogin, readCodexAccount } from './codex.js'
 import type { IncomingMessage } from 'node:http'
 import type { CodexContext, ManagementState, WebContext } from './types.js'
@@ -18,6 +19,7 @@ export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
 /** The reason code a refusal carries, or the generic one when it carries none. */
 function reasonOf(error: unknown): PatchReason {
+  if (error instanceof CodexVersionConfigError) console.error(error.message)
   if (error instanceof Error && error.name === 'SettingsConflictError') return 'conflict'
   const reason = error instanceof Error && 'reason' in error ? (error as { reason?: unknown }).reason : undefined
   return typeof reason === 'string' ? reason as PatchReason : 'source-unavailable'
@@ -31,7 +33,9 @@ function reasonOf(error: unknown): PatchReason {
  * credential — every source of these strings is a fixed message or a status.
  */
 function refusal(reason: PatchReason, message?: string) {
-  return { error: message ?? 'Model patch refused.', reason }
+  return { error: reason === 'version-config-invalid'
+    ? 'Repair the plugin config/codex.json and restart DSH. No model was added.'
+    : message ?? 'Model patch refused.', reason }
 }
 
 /**

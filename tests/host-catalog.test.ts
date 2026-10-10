@@ -5,7 +5,7 @@ const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === '@deepseek-ai/dsh-credentials') return { url: 'data:text/javascript,' + encodeURIComponent("export const credentialKey = (scope, id) => scope + '/' + id"), shortCircuit: true }
   return next(specifier, context)
 } })
-const { bindHostCatalog, resolveClientVersion, CODEX_CLIENT_VERSION } = await import('../lib/host-catalog.js')
+const { bindHostCatalog, resolveClientVersion, getCodexClientVersion } = await import('../lib/host-catalog.js')
 hooks.deregister()
 
 test('client version uses a validated override, CLI version, then the tested fallback', async () => {
@@ -13,10 +13,14 @@ test('client version uses a validated override, CLI version, then the tested fal
   const probe = async () => { probes++; return 'codex-cli 1.2.3\n' }
   assert.deepEqual(await resolveClientVersion('2.3.4', probe), { value: '2.3.4', source: 'environment' })
   assert.equal(probes, 0)
+  assert.deepEqual(await resolveClientVersion(null, async () => 'garbage', { version: '7.8.9' }), { value: '7.8.9', source: 'builtin' })
+  const { CodexVersionConfigError } = await import('../lib/codex-config.js')
+  await assert.rejects(resolveClientVersion('2.3.4', probe, { error: new CodexVersionConfigError('/test/codex.json') }), { reason: 'version-config-invalid' })
+  assert.equal(probes, 0)
   assert.deepEqual(await resolveClientVersion(null, probe), { value: '1.2.3', source: 'codex-cli' })
   assert.deepEqual(await resolveClientVersion(null, async () => 'codex 3.4.5-beta.1'), { value: '3.4.5-beta.1', source: 'codex-cli' })
-  assert.deepEqual(await resolveClientVersion(null, async () => { throw new Error('ENOENT') }), { value: CODEX_CLIENT_VERSION, source: 'builtin' })
-  assert.deepEqual(await resolveClientVersion(null, async () => 'garbage'), { value: CODEX_CLIENT_VERSION, source: 'builtin' })
+  assert.deepEqual(await resolveClientVersion(null, async () => { throw new Error('ENOENT') }), { value: getCodexClientVersion(), source: 'builtin' })
+  assert.deepEqual(await resolveClientVersion(null, async () => 'garbage'), { value: getCodexClientVersion(), source: 'builtin' })
   await assert.rejects(resolveClientVersion('1.2.3?account=secret', probe), /semantic version/)
 })
 

@@ -14,6 +14,8 @@ kind: "package-reference"
 - [安装](#安装)
 - [使用与模型补丁](#使用)
 - [Codex 图片生成](#codex-图片生成)
+- [项目规则 init 命令](#项目规则-init-命令)
+- [Codex 内置版本配置](#codex-内置版本配置)
 - [Codex usage 命令](#codex-usage-命令)
 - [Codex 5 小时额度条](#codex-5-小时额度条)
 - [网络](#网络)
@@ -51,13 +53,13 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 ### 使用发布安装包
 
-从 [v0.3.12 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.12>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.12/dsh-llm-chatgpt-0.3.12.tgz>)，在下载目录执行：
+从 [v0.3.13 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.13>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.13/dsh-llm-chatgpt-0.3.13.tgz>)，在下载目录执行：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
 ```
 
-该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。`0.3.12` 新增图片生成工具；发布内容与验收边界见[更新日志](<CHANGELOG.md#0312--2026-10-10>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。`0.3.13` 提供项目规则初始化、任务折叠展示及独立版本配置；发布内容与验收边界见[发布说明](<docs/design-task-release-codex-init-0.3.13.md>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
 
 安装后重启对应 DSH Web 进程并重新加载页面，加载新的服务端命令与客户端卡片；不能仅靠浏览器刷新更新服务端插件。升级自开发版同样需要安装正式包。
 
@@ -78,7 +80,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -96,7 +98,7 @@ dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
 
 已有 OAuth 凭据且宿主提供可写设置时，卡片上的「检查缺失模型」会以当前账号查询 Codex 模型目录，将可见、能力信息足够的条目与现有可选模型比较。已知到期时间不足五分钟且存在 refresh token 时，复用宿主 pi-ai 的鉴权解析器，在同一个 DSH 凭据事务内刷新保存后重新读取。自动刷新还要求宿主公开 API 兼容、凭据存储可写及网络可用；不具备这些条件或刷新失败时提示重试或重新登录。预览不写模型配置，但可能刷新已存 OAuth 凭据；仅在点击「确认补充缺失模型」后通过宿主设置服务写入。响应不向页面传输 OAuth 令牌；网络或模型来源不可用时**不使用旧 pi-ai catalog 猜测新增模型**，原配置保持不变。
 
-补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。重复检查会并入新安装 pi-ai 中新增的原生模型 ID，但不覆盖已有自定义字段，目录不会后台自动同步。「检查恢复原生目录」会先列出被清除的显式能力配置及将不再可选的非原生模型；单独确认后将 `models` 设为空列表，恢复原生目录，其它路由设置不变。恢复不要求远端目录或 OAuth 可用；无法读取原生目录时拒绝恢复。这不是撤销上一次补丁：全部显式条目及其自定义能力字段都会被清空，请先检查预览并备份需要保留的值。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。`client_version` 优先使用 `DSH_CODEX_CLIENT_VERSION`（合法版本号），其次通过有界的 `codex --version` 探测本机 CLI，均不可用时采用内置 `0.160.1`；预览展示实际版本与来源。部分新模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露宿主认识的等级，并在预览中以「未支持推理等级」列出被省略的等级。
+补丁通过 `llm-pi-ai.providers.openai-codex.models` 保存；该字段会整体替换目录，插件在写入时保留已有模型及其显式配置。重复检查会并入新安装 pi-ai 中新增的原生模型 ID，但不覆盖已有自定义字段，目录不会后台自动同步。「检查恢复原生目录」会先列出被清除的显式能力配置及将不再可选的非原生模型；单独确认后将 `models` 设为空列表，恢复原生目录，其它路由设置不变。恢复不要求远端目录或 OAuth 可用；无法读取原生目录时拒绝恢复。这不是撤销上一次补丁：全部显式条目及其自定义能力字段都会被清空，请先检查预览并备份需要保留的值。补丁只能修复模型无法选中，不能修复账户无权限或旧版 pi-ai 缺少推理协议能力。`client_version` 优先使用 `DSH_CODEX_CLIENT_VERSION`（合法版本号），其次通过有界的 `codex --version` 探测本机 CLI，均不可用时采用[独立配置](<config/codex.json>)中的内置版本；详见[版本配置](#codex-内置版本配置)。预览展示实际版本与来源。部分新模型的 `ultra` 推理等级无法由当前 pi-ai 表示，补丁只暴露宿主认识的等级，并在预览中以「未支持推理等级」列出被省略的等级。
 
 上下文容量取**来源的 `context_window`**（模型自身的窗口），缺失时回退 `max_context_window`。端点同时返回两者，而 `max_context_window` 的语义是**配置覆盖允许达到的上限**、不是模型窗口，因此只作回退；这与上游 Codex 自己的 `resolved_context_window()` 一致。已显式写入的 `contextWindow` 不会被改写，低于或高于来源默认窗口都会提示；详情分别展示默认窗口与最大配置覆盖上限，供你检查设置或恢复原生目录。来源提供 `max_output_tokens` 时映射输出上限，没有时提示继承宿主默认值。
 
@@ -118,6 +120,37 @@ no_proxy=localhost,127.0.0.1,::1
 ```
 
 loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受影响。
+
+## 项目规则 init 命令
+
+此功能包含在正式版 `0.3.13`，既有正式版 `0.3.12` 不包含。只构建本仓库不会更新运行中的插件；安装测试包后需重启承载插件的 DSH 进程并刷新页面。
+
+在对话输入框提交无参数命令 `/init`，当前会话 Agent 会检查项目并生成当前文件系统工作目录下的 AGENTS.md。不接受附件，不启动外部 Codex CLI，也不写固定模板。需要宿主提供 commands 与 followup 消息能力；已核对 DSH 0.2.1-alpha.1。无需为初始化任务切换到 Codex 模型，但会使用当前模型并消耗其额度。
+
+命令回执只表示任务已提交。运行中任务结束后，初始化在独立回合执行；取消或卸载发生在消息准备期间时不会晚到投递。投递后的取消由正常会话取消机制管理，不保证撤回已经完成的写入。
+
+当前源码将初始化指令显示为宿主原生、默认折叠的任务触发通知，不再作为大段普通用户气泡。点击通知可查看完整指令；模型仍收到原文，会话日志也保留原文，工具执行与最终结果正常展示。这不是模型思考内容，通知标题由宿主提供。该展示已在 DSH 0.2.1-alpha.1 的客户端函数中验证；旧宿主展示以其能力为准。正式版 `0.3.13` 包含此展示；升级安装后须重启承载插件的 DSH 进程并刷新页面，单独刷新浏览器不足以更新服务端消息来源。旧历史气泡保留原有展示，不修改既有日志。
+
+- 目标是当前会话目录，不是 DSH 服务进程目录；从仓库子目录执行不会自动写到 Git 根目录。
+- 已有 AGENTS.md 保留不改。存在或创建冲突时停止，不读取后覆盖重试；权限、plan mode 和 sandbox 限制不得绕过。
+- 使用宿主文件工具写入并读回。已安装观察策略与本地文件系统组合提供原子 createIfAbsent 保护，但不将脚本化测试声明为模型绝对遵守提示词的保证。
+- 规则刷新依赖启用的宿主 agent-instructions 组件；关闭该组件的 profile 不承诺自动加载。
+
+## Codex 内置版本配置
+
+正式版 `0.3.13` 提供此配置，旧版插件不会因为添加 JSON 文件而支持它。[内置配置](<config/codex.json>)作为独立文件随包分发，当前内容为：
+
+```json
+{
+  "codexClientVersion": "0.162.1"
+}
+```
+
+它只控制模型目录请求的 client_version，不升级本机 Codex CLI、宿主 pi-ai 或模型版本。配置有效时，选择顺序为环境变量 DSH_CODEX_CLIENT_VERSION → 本机 codex --version → 配置中的默认值。已有可用 CLI 或环境覆盖时，修改内置配置不会改变实际请求版本。
+
+代码通过模块相对路径定位配置，启动时读取一次；修改实际插件安装目录中的配置后重启承载插件的 DSH 进程，无需重新编译，单独刷新浏览器不会重新加载。安装位置需按实际插件状态确认；升级或重装可能覆盖本地修改，长期固定版本建议使用现有环境变量。
+
+配置必须是仅含 codexClientVersion 的 JSON 对象，文件不超过 4 KiB，版本字符串最长 64 字符，格式沿用现有版本规则（数字三段及可选预发布后缀）。配置缺失或无效时不使用隐藏的代码兜底：远端模型目录检查与应用返回配置修复提示，环境覆盖或本机 CLI 也不会掩盖错误。登录、usage、图片生成、init 及原生目录恢复不因该配置错误而失效。修复后重启以清除已保存的错误状态。
 
 ## Codex usage 命令
 
@@ -146,7 +179,7 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 下载正式安装包后安装：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.13.tgz
 ```
 
 安装前备份 Web profile 配置，安装后重启原 DSH Web 进程并刷新页面。本文未执行该安装命令或真实图片请求。
@@ -199,7 +232,17 @@ DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 
 [图片 API 测试](<tests/image-api.test.ts>)与[图片服务测试](<tests/image-service.test.ts>)覆盖请求约束、凭据刷新、错误脱敏、响应限制、取消、串行和保存故障；[图片宿主集成](<tests/installed-image-tool.test.ts>)使用真实 ToolRuntime、PTC 桥接和 LocalAttachmentStore，验证附件结果、透明通道与重新打开。远端响应和 PTC 进程执行器使用替身，不验证真实图片端点或完整浏览器行为。
 
-不设置 `DSH_INSTALL_ROOT` 时，依赖已安装宿主的集成测试会跳过；上述路径是本机示例，请替换为实际 DSH 安装目录。
+[原生折叠展示测试](<tests/installed-init-presentation.test.ts>)在私有 VM 中运行已安装宿主的真实消息分类与渲染函数，验证任务触发通知默认折叠、展开保留完整指令、重新折叠及普通用户气泡不受影响；React hooks 与未使用的 store 是替身，不代替真实浏览器验收。
+
+[初始化单元测试](<tests/init-command.test.ts>)覆盖参数、取消和准备期间卸载；[初始化宿主集成](<tests/installed-init-command.test.ts>)使用真实 CommandRuntime、AgentLoop、文件工具、观察策略及规则加载组件，验证独立回合、目录隔离、并发创建冲突和后续规则刷新。模型提供方是脚本化替身，不证明真实模型一定遵守所有初始化约束。
+
+[配置测试](<tests/codex-config.test.ts>)覆盖有界读取和格式校验；[打包测试](<tests/packed-codex-config.test.ts>)执行真实 npm pack，在新进程中验证解包配置重载及坏配置不阻断其它模块。该测试会触发 prepack 构建，默认从并行套件跳过，必须在其它构建和测试结束后单独运行：
+
+```sh
+DSH_PACK_TEST=1 node --disable-warning=ExperimentalWarning --experimental-strip-types --test tests/packed-codex-config.test.ts
+```
+
+不设置 `DSH_INSTALL_ROOT` 时，依赖已安装宿主的集成测试会跳过；上述路径是本机示例，请替换为实际 DSH 安装目录。不要将 skip 计作验证通过，打包测试需单独记录实际结果。
 
 另有断言覆盖令牌不外泄：驱动全部管理路由并检查每个响应体与 index 注入脚本，OAuth access/refresh 和 JWT 签名片段均不出现；用于补丁确认的预览签名不是 OAuth 密钥，会按接口契约返回。
 
