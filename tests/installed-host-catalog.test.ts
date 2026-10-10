@@ -4,12 +4,13 @@ import { createRequire, registerHooks } from 'node:module'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolve as esmResolve } from 'import-meta-resolve'
+import { fixture, imageResponse, signal } from './image-fixtures.ts'
 
 const root = process.env.DSH_INSTALL_ROOT
 
 test('the real pi-ai auth resolver rotates a grant under the DSH record transaction', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to test the installed pi-ai auth resolver.',
-}, async () => {
+}, async t => {
   const require = createRequire(resolve(root, 'package.json'))
   const hooks = registerHooks({ resolve(specifier, context, next) {
     if (specifier === '@deepseek-ai/dsh-credentials') return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
@@ -37,14 +38,26 @@ test('the real pi-ai auth resolver rotates a grant under the DSH record transact
       async refresh(credential, signal) {
         assert.equal(signal.aborted, false)
         refreshes++; enter(); await barrier
-        return { ...credential, access: 'refreshed', refresh: 'rotated', expires: Date.now() + 3_600_000 }
+        return { ...credential, access: refreshes === 1 ? 'refreshed' : 'refreshed-again', refresh: 'rotated', expires: Date.now() + 3_600_000 }
       },
       async toAuth(credential) { return { apiKey: credential.access } },
     } } }
     const host = bindHostCatalog(ctx, pi, provider)
     const first = host.refreshCredential()
     await entered
-    const second = host.refreshCredential()
+    const { createImageService } = await import('../lib/image-service.js')
+    const f = fixture(), imageRefreshEntered = Promise.withResolvers()
+    const images = createImageService({ ...f.ctx, credentials: ctx.credentials }, {
+      refresh: async (signal, options) => {
+        const job = host.refreshCredential({ signal, ...options })
+        imageRefreshEntered.resolve()
+        await job; return true
+      },
+      fetcher: async (_url, init) => { assert.equal(init.headers.authorization, 'Bearer refreshed'); return imageResponse() },
+    })
+    t.after(() => images.dispose())
+    const second = images.generate({ prompt: 'fox' }, signal())
+    await imageRefreshEntered.promise
     release()
     await Promise.all([first, second])
     assert.equal(refreshes, 1)
@@ -52,5 +65,11 @@ test('the real pi-ai auth resolver rotates a grant under the DSH record transact
     assert.equal(record.payload.refresh, 'rotated')
     assert.equal(record.payload.accountId, 'test-account')
     assert.ok(host.models.some(model => model.id === 'gpt-6-sol'))
+    await host.refreshCredential({ rejectedAccess: 'refreshed' })
+    assert.equal(refreshes, 2, 'a rejected token refresh does not demand an artificially long expiry')
+    assert.equal(record.payload.access, 'refreshed-again')
+    assert.ok(record.payload.expires > Date.now())
+    await host.refreshCredential({ rejectedAccess: 'expired' })
+    assert.equal(refreshes, 2, 'a stale rejection must not rotate another request’s new token')
   } finally { hooks.deregister() }
 })

@@ -7,15 +7,16 @@
  * is that registrant — a settings-page surface for one flow the host already
  * implements.
  *
- * It deliberately owns no protocol: pi-ai speaks the wire format, writes the
- * credential, and refreshes it. Removing this plugin removes a button, not a
- * provider.
+ * pi-ai owns chat transport, login, and credential refresh. The optional
+ * image_gen tool calls the standalone Codex image endpoint and stores results
+ * through host attachments; removing this plugin does not remove the provider.
  * @module dsh-llm-chatgpt
  */
 import { createCodexManagement, registerCodexManagement } from './management.js'
 import { createModelPatches } from './model-patches.js'
 import { createUsageService } from './usage.js'
 import { registerUsageCommand } from './usage-command.js'
+import { registerImageTool } from './image-tool.js'
 import type { PluginContext } from './types.js'
 
 export const name = 'llm-chatgpt'
@@ -28,6 +29,7 @@ export function apply(ctx: PluginContext) {
   const usage = createUsageService(ctx)
   ctx.effect(() => () => usage.dispose(), 'codex usage service')
   ctx.inject(['commands'], commands => { registerUsageCommand(commands, usage) })
+  ctx.inject(['tools', 'attachments', 'llm'], async services => { await registerImageTool(ctx, services) })
   let patches: ReturnType<typeof createModelPatches> | undefined
   ctx.inject(['settings', 'llm'], services => { patches = createModelPatches(ctx, services) })
   ctx.inject(['webServer', 'webRuntime'], web => {

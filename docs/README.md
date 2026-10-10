@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.11`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.11>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
+当前包版本为 `0.3.12`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.12>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
 
 ## 目录
 
@@ -23,6 +23,7 @@ kind: "reference"
 - [Codex usage 命令](<../README.md#codex-usage-命令>)：5 小时与周剩余额度、主动查询和缓存提示。
 - [Codex 5 小时额度条](<../README.md#codex-5-小时额度条>)：剩余显示、五分钟轮询、旧数据与显示条件。
 - [usage 命令与剩余额度实施方案](<design-task-feature-codex-usage-command.md>)：双窗口查询、五分钟轮询及本次实施验收记录。
+- [图片生成工具实施方案](<design-task-feature-codex-image-generation-tool.md>)：已实现首版；复用 ChatGPT 凭据、独立图片接口、附件展示及待完成的真实环境验收。
 - [验证范围](<../README.md#验证范围>)：自动化测试、宿主集成及真实环境验收边界。
 - [更新日志](<../CHANGELOG.md>)：版本功能和对应验证记录。
 

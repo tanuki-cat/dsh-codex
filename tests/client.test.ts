@@ -92,7 +92,7 @@ function browser({ document = styleDocument(), environment = {} } = {}) {
           if (typeof dispose === 'function') disposers.push(dispose)
         },
         slots: {
-          inject(name, callback) { if (name === 'conversation.chat.commandview') return; assert.equal(name, 'settings.models.provider-card'); callback() },
+          inject(name, callback) { if (name === 'conversation.chat.commandview' || name === 'tool.call.toolview') return; assert.equal(name, 'settings.models.provider-card'); callback() },
           register(value, view) { seats.set(value.key, { entry: value, component: view }) },
         },
       }
@@ -226,6 +226,7 @@ test('quota list contribution registers and coexists in the real installed Host 
     'conversation.input.right': { kind: 'list', scope: 'session' },
     'settings.models.provider-card': { kind: 'keyed', scope: 'root' },
     'conversation.chat.commandview': { kind: 'keyed', scope: 'session' },
+    'tool.call.toolview': { kind: 'keyed', scope: 'session' },
   } }, () => null))
   cleanups.push(core.register({ name: 'conversation.input.right', id: 'existing-contribution' }, () => null))
   assert.throws(() => core.register({ name: 'conversation.input.right', key: 'wrong-key' }, () => null), /requires options.id/)
@@ -247,6 +248,9 @@ test('quota list contribution registers and coexists in the real installed Host 
   const command = core.entriesOfSlot('conversation.chat.commandview')[0]
   assert.equal(command.options.key, 'usage'); assert.equal(command.options.id, undefined)
   assert.equal(typeof command.component, 'function')
+  const imageView = core.entriesOfSlot('tool.call.toolview')[0]
+  assert.equal(imageView.options.key, 'image_gen')
+  assert.equal(typeof imageView.component, 'function')
 })
 
 test('the card is seated on the llm-pi-ai family and registers bilingual copy', () => {

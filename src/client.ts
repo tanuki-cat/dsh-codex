@@ -13,6 +13,8 @@ import { createUsageController, createUsageView, usageCss, usageDictionaries } f
 import type { ModelStore, UsageController } from './client-usage.js'
 import { createUsageCommandView, usageCommandCss, usageCommandDictionaries } from './client-usage-command.js'
 import type { UsagePrimitives, UsageCommandNode } from './client-usage-command.js'
+import { createImageToolView, imageCss, imageDictionaries } from './client-image.js'
+import type { ImageToolProps } from './client-image.js'
 
 type ManagementStatus = {
   state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
@@ -150,7 +152,7 @@ window.__ModuleLoader__.load({
       const tag = document.createElement('style')
       tag.dataset.plugin = 'dsh-llm-chatgpt'
       tag.dataset.pluginCss = STYLE_ID
-      tag.textContent = css + usageCss + usageCommandCss
+      tag.textContent = css + usageCss + usageCommandCss + imageCss
       document.head.appendChild(tag)
       return () => tag.remove()
     }
@@ -491,6 +493,15 @@ window.__ModuleLoader__.load({
       ctx.effect(() => mountStyles(), 'chatgpt sign-in styles')
       ctx.effect(() => ctx.locale.register(NS, dictionaries), 'chatgpt sign-in translations')
       const t = ctx.locale.bind(NS)
+      ctx.slots.inject('tool.call.toolview', () => {
+        const imageNS = 'codexImage'
+        ctx.effect(() => ctx.locale.register(imageNS, imageDictionaries), 'codex image translations')
+        const slots = ctx.slots as unknown as {
+          register(entry: { name: string; key: string; locale: string; inject(): { t(key: string): string } }, view: (props: ImageToolProps) => React.ReactNode): void
+        }
+        slots.register({ name: 'tool.call.toolview', key: 'image_gen', locale: imageNS,
+          inject: () => ({ t: ctx.locale.bind(imageNS) }) }, createImageToolView(React, primitives))
+      })
       ctx.slots.inject('conversation.chat.commandview', () => {
         const commandNS = 'codexUsageCommand'
         ctx.effect(() => ctx.locale.register(commandNS, usageCommandDictionaries), 'codex usage command translations')

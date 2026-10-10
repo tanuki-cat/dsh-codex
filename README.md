@@ -13,6 +13,7 @@ kind: "package-reference"
 
 - [安装](#安装)
 - [使用与模型补丁](#使用)
+- [Codex 图片生成](#codex-图片生成)
 - [Codex usage 命令](#codex-usage-命令)
 - [Codex 5 小时额度条](#codex-5-小时额度条)
 - [网络](#网络)
@@ -50,13 +51,13 @@ DSH 的 `@deepseek-ai/dsh-llm-pi-ai` 已内置官方实现：它直接引入 `@e
 
 ### 使用发布安装包
 
-从 [v0.3.11 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.11>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.11/dsh-llm-chatgpt-0.3.11.tgz>)，在下载目录执行：
+从 [v0.3.12 GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.12>) 下载 [安装包](<https://github.com/tanuki-cat/dsh-codex/releases/download/v0.3.12/dsh-llm-chatgpt-0.3.12.tgz>)，在下载目录执行：
 
 ```sh
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.11.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
 ```
 
-该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。用户已反馈 `0.3.11-dev.2` 安装测试通过；正式版本保持该开发版功能源码，另做类型检查、构建与安装包 smoke。验收项及限制见 [0.3.11 发布说明](<docs/design-task-release-codex-usage-0.3.11.md>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
+该命令写入本机 `web` profile，请先备份其配置；旧版本遗留的 `llm-chatgpt` 配置项需按下述源码安装脚本的清理逻辑处理。`0.3.12` 新增图片生成工具；发布内容与验收边界见[更新日志](<CHANGELOG.md#0312--2026-10-10>)。当前发布渠道为 GitHub Release，尚未发布到 npm registry；不要使用 `npm install dsh-llm-chatgpt` 获取该版本。安装包不含开发脚本或测试。
 
 安装后重启对应 DSH Web 进程并重新加载页面，加载新的服务端命令与客户端卡片；不能仅靠浏览器刷新更新服务端插件。升级自开发版同样需要安装正式包。
 
@@ -77,7 +78,7 @@ node --experimental-strip-types ./scripts/install-local.ts
 ```sh
 npm install
 npm pack --cache .npm-cache
-dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.11.tgz
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
 ```
 
 本插件不需要在 `cordis.patch.yml` 中添加任何配置项。
@@ -138,9 +139,39 @@ loopback 流量始终绕过代理，因此本机 Web UI 与 OAuth 回调不受�
 
 当前命令、卡片与显示行为的版本边界见 [0.3.11 发布说明](<docs/design-task-release-codex-usage-0.3.11.md>)。初版查询实施记录见 [usage 实施方案](<docs/design-task-feature-codex-usage-command.md>)；`0.3.10` 的历史额度条边界见 [0.3.10 发布说明](<docs/design-task-release-codex-five-hour-usage-0.3.10.md>)。
 
+## Codex 图片生成
+
+`0.3.12` 提供 `image_gen` 工具，复用已有 ChatGPT 登录生成单张位图，不需要 `OPENAI_API_KEY` 或外部 Codex CLI。构建源码不会更新已运行的 DSH 服务端插件。
+
+下载正式安装包后安装：
+
+```sh
+dsh plugin --profile web add ./dsh-llm-chatgpt-0.3.12.tgz
+```
+
+安装前备份 Web profile 配置，安装后重启原 DSH Web 进程并刷新页面。本文未执行该安装命令或真实图片请求。
+
+宿主需提供兼容的公开工具、附件和模型路由服务；已核对版本为 `0.2.1-alpha.1`。当前模型必须明确支持图片输入，账号还须有 Codex 图片端点权限和额度。普通模型可用不代表图片接口可用。缺少可选服务时，图片工具不注册，不影响登录、模型补丁和用量查询。
+
+在会话中提出“生成一张图片”或“生成透明背景图片”，模型可调用 `image_gen`。工具只接受非空 `prompt`（最多 32,000 字符）和可选布尔值 `transparent_background`（默认 `false`）；固定使用 `gpt-image-2`，尺寸和质量均为 `auto`。不支持编辑图片、多图生成、任意保存路径或精确尺寸保证。
+
+图片以标准持久化附件返回，可复用宿主图片展示与下载路径。宿主会校验、缩放或重编码图片，结果元数据描述保存后的宽高、格式和字节数；不承诺下载原始字节或原始分辨率。提示词会发送到 ChatGPT Codex 图片端点，调用会消耗账号图片额度。
+
+嵌套调用时，宿主 Node PTC 的默认 120 秒预算短于图片服务的 180 秒期限；应在 `run_code` 上显式设置足够的预算。宿主桥接测试使用了以下调用，未访问真实图片端点：
+
+```ts
+return await tools.image_gen({ prompt: 'A red fox illustration', transparent_background: true })
+```
+
+上面的函数体配合 `run_code` 的 `timeoutMs: 240000` 使用。不要通过 Shell、Python 或未授权文件操作代替工具。图片保存在宿主附件服务，不写 Codex 默认目录，也不修改全局 imagegen 技能。
+
+鉴权拒绝最多刷新并重试一次；限流会遵守 `Retry-After`。网络中断、超时、5xx、损坏响应和本地保存失败不会自动重新生成。取消不保证远端生成停止或额度退回；已开始的附件保存会等待结束，但取消或账号变化后的结果不会报告成功。
+
+[图片实施与验收记录](<docs/design-task-feature-codex-image-generation-tool.md#实施记录>)区分已通过的模拟网络测试与尚未执行的真实端点、浏览器下载和会话恢复验收。
+
 ## 当前限制
 
-- 不实现模型推理协议；图片输入、WebSocket 传输等仍由官方 pi-ai 实现。
+- 不实现聊天推理协议；聊天图片输入和 WebSocket 传输仍由官方 pi-ai 实现。图片生成使用独立 Codex Images 接口。
 - 只在预览并确认后补充缺失模型，不提供通用模型编辑，也不自动修改默认模型。
 - 设置页账户信息来自凭据中的 JWT 声明（名称、plan、到期时间）；额度条单独请求 usage 接口，凭据到期时间不是额度重置时间。
 
@@ -165,6 +196,8 @@ DSH_INSTALL_ROOT=/opt/homebrew/lib/node_modules/@deepseek-ai/dsh npm test
 [宿主目录测试](<tests/host-catalog.test.ts>)覆盖请求版本选择、刷新事务与并发避免重复旋转；[宿主鉴权集成测试](<tests/installed-host-catalog.test.ts>)用真实 pi-ai 鉴权解析器验证同一个 DSH 凭据事务中的刷新行为，但使用替身令牌交换，不连接真实 OAuth endpoint。
 
 [额度服务测试](<tests/usage.test.ts>)覆盖双窗口识别、独立重置、响应大小、超时、账号隔离、缓存合并、主动查询限频、退避和刷新；[额度客户端测试](<tests/client-usage.test.ts>)覆盖五分钟边界、隐藏/离线、旧数据到期、晚到响应、剩余填充、色阶及独立进度语义。[命令测试](<tests/usage-command.test.ts>)覆盖文本、缓存、错误和取消；[命令宿主集成](<tests/installed-usage-command.test.ts>)用真实 CommandRuntime 验证发现、执行、日志和卸载，网络与会话存储使用替身。[客户端集成测试](<tests/client.test.ts>)还验证额度条在真实已安装 Host SlotCore 中注册并与其它 list 贡献共存。
+
+[图片 API 测试](<tests/image-api.test.ts>)与[图片服务测试](<tests/image-service.test.ts>)覆盖请求约束、凭据刷新、错误脱敏、响应限制、取消、串行和保存故障；[图片宿主集成](<tests/installed-image-tool.test.ts>)使用真实 ToolRuntime、PTC 桥接和 LocalAttachmentStore，验证附件结果、透明通道与重新打开。远端响应和 PTC 进程执行器使用替身，不验证真实图片端点或完整浏览器行为。
 
 不设置 `DSH_INSTALL_ROOT` 时，依赖已安装宿主的集成测试会跳过；上述路径是本机示例，请替换为实际 DSH 安装目录。
 

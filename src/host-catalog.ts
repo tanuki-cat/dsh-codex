@@ -6,7 +6,7 @@ import type { CodexContext } from './types.js'
 export interface NativeModel { id: string; contextWindow?: number; maxTokens?: number }
 export interface HostCatalog {
   models: readonly NativeModel[]
-  refreshCredential(): Promise<void>
+  refreshCredential(options?: { signal?: AbortSignal; minOAuthValidityMs?: number; rejectedAccess?: string }): Promise<void>
 }
 type Credential = { type: 'oauth'; access: string; refresh: string; expires: number; [key: string]: unknown }
 type Store = {
@@ -68,8 +68,19 @@ export function bindHostCatalog(ctx: CodexContext, pi: PiModule, provider: Provi
   models.setProvider(provider)
   return {
     models: provider.getModels(),
-    async refreshCredential() {
-      if (!await models.getAuth(CODEX_PROVIDER, { signal: AbortSignal.timeout(10_000), minOAuthValidityMs: 300_000 })) throw new Error('No usable Codex credential.')
+    async refreshCredential(options = {}) {
+      const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000)
+      let resolver = models
+      if (options.rejectedAccess) {
+        // Only the explicitly rejected token looks expired to pi-ai; never persist this projection.
+        const project = (credential: Credential | undefined) => credential && credential.access === options.rejectedAccess ? { ...credential, expires: 0 } : credential
+        resolver = pi.createModels({ credentials: { ...store,
+          read: async id => project(await store.read(id)),
+          modify: (id, fn) => store.modify(id, current => fn(project(current))),
+        } })
+        resolver.setProvider(provider)
+      }
+      if (!await resolver.getAuth(CODEX_PROVIDER, { signal, minOAuthValidityMs: options.minOAuthValidityMs ?? 300_000 })) throw new Error('No usable Codex credential.')
     },
   }
 }

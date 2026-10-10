@@ -31,7 +31,7 @@ function context({ flow = true } = {}) {
       },
     },
     inject(dependencies, callback) {
-      if (dependencies[0] === 'commands') return
+      if (dependencies[0] === 'commands' || dependencies[0] === 'tools') return
       if (dependencies[0] === 'settings') {
         assert.deepEqual(dependencies, ['settings', 'llm'])
         return
@@ -72,7 +72,7 @@ test('optional command shares parent service and survives web scope disposal', a
   const ctx = { credentials: { async readRecord() { return undefined } }, authorization: { cancel() {}, describe() { return undefined } },
     effect(fn) { parentCleanups.push(fn()) },
     inject(dependencies, callback) {
-      if (dependencies[0] === 'settings') return
+      if (dependencies[0] === 'settings' || dependencies[0] === 'tools') return
       if (dependencies[0] === 'commands') { callback({ commands: { register(value) { definition = value; return () => {} } } }); return }
       callback({ webServer: { register() { return () => {} } }, webRuntime: { trustedHosts: [] }, on() {}, effect(fn) { webCleanups.push(fn()) } })
     } }

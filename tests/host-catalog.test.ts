@@ -79,3 +79,22 @@ test('a provider refresh rejection preserves the stored record', async () => {
   assert.equal(committed, false)
   assert.equal(record.payload.refresh, 'r')
 })
+
+test('401 expiry projection never changes the stored record when refresh fails', async () => {
+  const record = { kind: 'grant', payload: { type: 'oauth', access: 'rejected', refresh: 'r', expires: Date.now() + 3600_000 } }
+  let committed = false
+  const ctx = { credentials: {
+    readRecord: async () => record,
+    modifyRecord: async (_key, fn) => { const next = await fn(record); committed = next !== undefined; return next ?? record },
+    deleteRecord: async () => {},
+  } }
+  const pi = { createModels({ credentials }) { return { setProvider() {},
+    getAuth: async id => {
+      assert.equal((await credentials.read(id)).expires, 0)
+      return credentials.modify(id, async current => { assert.equal(current.expires, 0); throw new Error('refresh failed') })
+    },
+  } } }
+  const host = bindHostCatalog(ctx, pi, { getModels: () => [] })
+  await assert.rejects(host.refreshCredential({ rejectedAccess: 'rejected' }), /refresh failed/)
+  assert.equal(committed, false); assert.ok(record.payload.expires > Date.now())
+})
