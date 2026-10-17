@@ -149,7 +149,7 @@ test('installer leaves a profile with no plugin entry untouched', () => {
   assert.equal(readFileSync(join(current.profile, 'cordis.patch.yml'), 'utf8'), before)
 })
 test('installer accepts every declared host generation and refuses an undeclared one', () => {
-  const versions = ['0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2']
+  const versions = ['0.2.0-rc.2', '0.2.1-alpha.1', '0.2.1-alpha.2', '0.2.1-rc.1']
   for (const runtime of versions) {
     const current = fixture()
     const result = current.run({ TEST_DSH_VERSION: runtime })

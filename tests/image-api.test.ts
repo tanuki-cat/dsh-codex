@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { generateImage, decodeImageResponse, validateImageInput, IMAGE_ENDPOINT } from '../lib/image-api.js'
+import { generateImage, decodeImageResponse, canonicalBase64, validateImageInput, IMAGE_ENDPOINT } from '../lib/image-api.js'
 import { PNG, imageResponse, signal, rejectsReason } from './image-fixtures.ts'
 
 test('fixed image endpoint, credentials, defaults and transparent request', async () => {
@@ -22,6 +22,23 @@ test('strict single image, canonical base64, format and byte limits', () => {
   for (const value of [null, {}, { data: [] }, { data: [{}, {}] }, { data: [{ b64_json: 'abcd===' }] }, { data: [{ b64_json: 'eA==' }] }, { data: [{ b64_json: PNG.toString('base64') }], output_format: 'jpeg' }]) assert.throws(() => decodeImageResponse(value, 1024), rejectsReason('invalid-response'))
   assert.throws(() => decodeImageResponse({ data: [{ b64_json: PNG.toString('base64') }] }, 10), rejectsReason('invalid-response'))
 })
+test('canonical base64 is proven from the final quantum, not by re-encoding', () => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  // A PNG-signature payload padded so the final quantum has discarded bits.
+  const raw = Buffer.concat([PNG, Buffer.alloc(PNG.length % 3 === 2 ? 2 : 1, 9)])
+  assert.notEqual(raw.length % 3, 0)
+  const encoded = raw.toString('base64')
+  assert.equal(canonicalBase64(encoded), true)
+  assert.deepEqual(decodeImageResponse({ data: [{ b64_json: encoded }] }, 1024).data, raw)
+  // Same decoded bytes, different string: only the ignored trailing bits differ.
+  const at = encoded.length - (encoded.endsWith('==') ? 3 : 2)
+  const mutated = encoded.slice(0, at) + alphabet[alphabet.indexOf(encoded[at]) | 1] + encoded.slice(at + 1)
+  assert.notEqual(mutated, encoded)
+  assert.deepEqual(Buffer.from(mutated, 'base64'), raw)
+  assert.equal(canonicalBase64(mutated), false)
+  assert.throws(() => decodeImageResponse({ data: [{ b64_json: mutated }] }, 1024), rejectsReason('invalid-response'))
+})
+
 test('HTTP failures are classified, sanitized and never retried by transport', async () => {
   for (const [status, code, reason] of [[401, '', 'credential-expired'], [403, '', 'permission-denied'], [429, 'insufficient_quota', 'quota-exhausted'], [429, 'rate_limit', 'rate-limited'], [500, '', 'network-error']]) {
     let calls = 0

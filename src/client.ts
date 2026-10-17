@@ -24,6 +24,7 @@ type ManagementStatus = {
   credentialState?: 'absent' | 'expired' | 'incomplete' | 'unexpired'
   account?: { name?: string; email?: string; plan?: string; expires?: number }
   notice?: { url?: string; message?: string }
+  errorKind?: 'timeout'
 }
 type Snapshot = { loading: boolean; busy: boolean; status?: ManagementStatus; error: boolean }
 type Connection = { path: string; token: string }
@@ -164,6 +165,7 @@ window.__ModuleLoader__.load({
         expiredHint: '访问令牌已过期；下次模型请求会尝试自动刷新。若刷新失败，请重新登录。',
         incompleteHint: '已存凭据缺少必要信息，请重新登录。',
         error: '操作失败，请检查网络与账户权限后重试。',
+        timeout: '等待授权超时，本次登录已结束；需要时请重新点击登录。',
         patchPreview: '检查缺失模型', patchApply: '确认补充缺失模型', patchEmpty: '没有可补充的模型', patchError: '无法安全获取或应用 Codex 模型列表，请稍后重试。', patchCount: '拟补充模型', patchPreserved: '保留模型', patchUnverified: '待核实', patchFallback: '远端目录不可用，以下仅为本机目录；未写入补丁', patchLimited: '未支持推理等级', patchTotal: '远端条目', patchDetails: '查看模型与来源详情', logoutShort: '退出登录', plan: '订阅',
         patchSelected: '当前可选', patchSourceAt: '列表获取于', patchClient: '请求版本', patchWrites: '写入后列表', patchHandover: '显式 models 会接管整个目录：未列出的模型将不可选。', patchUnlisted: '来源未收录（保留但来源列表中没有）', patchUnderstated: '声明的上下文小于来源给出的窗口',
         patchApplied: '已补充模型', patchRevision: '配置修订',
@@ -184,6 +186,7 @@ window.__ModuleLoader__.load({
         expiredHint: 'Access token expired; the next model request will attempt an automatic refresh. Sign in again if it fails.',
         incompleteHint: 'The stored credential is missing required fields. Sign in again.',
         error: 'Operation failed. Check your network and account permissions, then retry.',
+        timeout: 'Authorization timed out and this sign-in ended. Start it again when you are ready.',
         patchPreview: 'Check missing models', patchApply: 'Confirm missing model patch', patchEmpty: 'No missing models to add', patchError: 'Cannot safely retrieve or apply Codex models. Try again later.', patchCount: 'Models to add', patchPreserved: 'Preserved models', patchUnverified: 'Unverified', patchFallback: 'Remote catalog unavailable; installed models only. No patch applied.', patchLimited: 'Unsupported reasoning efforts', patchTotal: 'Remote entries', patchDetails: 'Model and source details', logoutShort: 'Sign out', plan: 'Plan',
         patchSelected: 'Currently selectable', patchSourceAt: 'Listing fetched', patchClient: 'Requested as', patchWrites: 'Catalogue after writing', patchHandover: 'An explicit models list replaces the whole catalogue: models not listed here become unselectable.', patchUnlisted: 'Not in the source listing (kept anyway)', patchUnderstated: 'Declared context below the window the source gives',
         patchApplied: 'Models added', patchRevision: 'Config revision',
@@ -239,6 +242,7 @@ window.__ModuleLoader__.load({
         } finally { requests.delete(abort) }
       }
       let pollFailures = 0
+      let pendingPolls = 0
       const schedulePoll = (expected: number, delay: number) => {
         stopPolling()
         timer = environment.setTimeout(async () => {
@@ -270,13 +274,18 @@ window.__ModuleLoader__.load({
           }
         }
         if (status?.state !== 'pending') {
+          pendingPolls = 0
           stopPolling()
           popup?.close()
           popup = undefined
           popupUrl = undefined
           return
         }
-        schedulePoll(expected, 500)
+        // A healthy pending check backs off. The attempt itself is bounded
+        // server-side, so a few seconds of extra notice latency replaces a
+        // request every 500 ms for as long as the attempt runs.
+        pendingPolls += 1
+        schedulePoll(expected, Math.min(2_000, 500 * 2 ** (pendingPolls - 1)))
       }
       let loadingRequest = false
       const load = async () => {
@@ -453,6 +462,9 @@ window.__ModuleLoader__.load({
               : button(t(stored ? 'relogin' : 'login'), 'primary', () => void controller.current?.act('login')),
           stored && !connected && !pending && h('span', { className: 'dsh-chatgpt-push' }, button(t('logoutShort'), 'danger', () => void controller.current?.act('logout')))),
         state.error && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('error')),
+        // A bounded attempt that ran out of time is a distinct outcome from a
+        // failed request; the card must not drop the pending UI without a word.
+        status?.errorKind === 'timeout' && h('p', { className: 'dsh-chatgpt-error', role: 'alert' }, t('timeout')),
 
         patch && h('section', { className: 'dsh-chatgpt-preview', 'aria-live': 'polite' },
           h('p', { className: 'dsh-chatgpt-preview-title' }, patch.unavailable ? t('patchFallback') : patch.kind === 'restore' ? t(patch.signature ? 'patchRestoreConfirm' : 'patchRestoreEmpty') : patch.added.length ? `${t('patchCount')} (${patch.added.length})` : t('patchEmpty')),

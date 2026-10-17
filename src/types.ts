@@ -47,4 +47,6 @@ export interface ManagementState {
   state: 'idle' | 'pending' | 'authorized' | 'cancelled' | 'failed'
   notice?: AuthorizationNotice
   error?: string
+  /** Machine-readable cause of a failure, so the page can name the remedy. */
+  errorKind?: 'timeout'
 }

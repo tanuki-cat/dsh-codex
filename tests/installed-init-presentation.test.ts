@@ -32,6 +32,9 @@ test('installed Chat renders init as a collapsed turn trigger, preserves expanda
     if (name === 'react-dom') return { createPortal: value => value }
     if (name === '@deepseek-ai/dsh-client-store') return store
     if (name === '@deepseek-ai/dsh-client-ui-primitives') return primitives
+    // 0.2.1-rc.1's Chat client imports the virtualizer at module scope but only
+    // reaches it while rendering the transcript, which this test never draws.
+    if (name === '@tanstack/react-virtual') return {}
     assert.fail('unexpected host dependency: ' + name)
   })
   const { createInitCommand } = await import('../lib/init-command.js')

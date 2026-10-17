@@ -185,6 +185,20 @@ export function createModelPatches(ctx: CodexContext, services: PatchServices, f
   let version: Promise<ClientVersion> | undefined
   const clientVersion = () => version ??= (options.clientVersion ?? resolveClientVersion)()
   const wait = options.wait ?? (ms => new Promise(resolve => setTimeout(resolve, ms)))
+  // Concurrent reviews of one account and request version share a single
+  // listing request. The entry is dropped the moment it settles: a later review
+  // must observe the source as it is then, because that is exactly what the
+  // confirmation signature is checked against.
+  let listing: { key: string; job: ReturnType<typeof fetchCodexCatalog> } | undefined
+  function remoteCatalog(access: string, accountId: string, version: string) {
+    const key = createHash('sha256').update(accountId + '\0' + access + '\0' + version).digest('hex')
+    if (listing?.key === key) return listing.job
+    const entry = { key, job: fetchCodexCatalog(access, accountId, fetcher, version) }
+    listing = entry
+    const settled = () => { if (listing === entry) listing = undefined }
+    void entry.job.then(settled, settled)
+    return entry.job
+  }
   async function confirm(expected: readonly string[], exact = false) {
     for (const delay of [0, 100, 250, 500, 1000]) {
       if (delay) await wait(delay)
@@ -212,7 +226,7 @@ export function createModelPatches(ctx: CodexContext, services: PatchServices, f
     if (typeof grant?.access !== 'string' || !positive(grant.expires) || (grant.expires as number) <= Date.now()) throw new PatchError('credential-expired', 'Sign in to ChatGPT or refresh the expired credential first.')
     const accountId = typeof grant.accountId === 'string' && grant.accountId.length > 0 ? grant.accountId : undefined
     if (!accountId) throw new PatchError('credential-incomplete', 'Codex credential has no account ID; sign in again.')
-    const catalog = await fetchCodexCatalog(grant.access, accountId, fetcher, requestedVersion.value)
+    const catalog = await remoteCatalog(grant.access, accountId, requestedVersion.value)
     const current = await services.llm.listModels(CODEX_PROVIDER)
     const currentIds = new Set(current.map(model => model.id))
     const missing = catalog.entries.filter(model => !currentIds.has(model.id))

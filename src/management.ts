@@ -17,6 +17,16 @@ import type { createUsageService } from './usage.js'
 
 export const MANAGEMENT_GLOBAL = '__DSH_CHATGPT_MANAGEMENT__'
 
+/**
+ * How long one sign-in attempt may stay pending.
+ *
+ * pi-ai waits for the browser callback without a deadline of its own, so an
+ * abandoned attempt would otherwise stay pending forever: its callback port
+ * stays bound, no second attempt is accepted, and usage queries stay paused.
+ * This bound is what makes those states recoverable.
+ */
+export const SIGN_IN_TIMEOUT_MS = 600_000
+
 /** The reason code a refusal carries, or the generic one when it carries none. */
 function reasonOf(error: unknown): PatchReason {
   if (error instanceof CodexVersionConfigError) console.error(error.message)
@@ -46,9 +56,13 @@ function refusal(reason: PatchReason, message?: string) {
  * the authorization URL across later progress messages. Polling it instead of
  * holding a stream open keeps the management surface a plain request/response route.
  * @param ctx - the plugin context carrying the authorization and credential seams.
+ * @param invalidateUsage - reports attempt transitions, so usage queries pause while a
+ * sign-in may rewrite the credential and resume once it cannot.
+ * @param options - attempt bounds; the default is the production deadline.
  * @returns the codex operations the management route exposes.
  */
-export function createCodexManagement(ctx: CodexContext, invalidateUsage: (paused?: boolean) => void = () => {}) {
+export function createCodexManagement(ctx: CodexContext, invalidateUsage: (paused?: boolean) => void = () => {}, options: { loginTimeoutMs?: number } = {}) {
+  const loginTimeoutMs = options.loginTimeoutMs ?? SIGN_IN_TIMEOUT_MS
   let current: ManagementState = { state: 'idle' }
   let active: { controller: AbortController; job?: Promise<void> } | undefined
   let closed = false
@@ -83,7 +97,14 @@ export function createCodexManagement(ctx: CodexContext, invalidateUsage: (pause
     const controller = new AbortController()
     const attempt: { controller: AbortController; job?: Promise<void> } = { controller }
     active = attempt
-    current = { state: 'pending', notice: undefined, error: undefined }
+    current = { state: 'pending', notice: undefined, error: undefined, errorKind: undefined }
+    let timedOut = false
+    const deadline = setTimeout(() => {
+      if (active !== attempt) return
+      timedOut = true
+      controller.abort(new Error('Sign-in attempt timed out.'))
+    }, loginTimeoutMs)
+    deadline.unref()
     attempt.job = beginCodexLogin(ctx, {
       signal: controller.signal,
       notify(notice) {
@@ -93,12 +114,16 @@ export function createCodexManagement(ctx: CodexContext, invalidateUsage: (pause
     }).then(outcome => {
       if (active !== attempt) return
       current = outcome === 'authorized'
-        ? { state: 'authorized', notice: undefined, error: undefined }
-        : { state: 'cancelled', notice: undefined, error: undefined }
+        ? { state: 'authorized', notice: undefined, error: undefined, errorKind: undefined }
+        : { state: 'cancelled', notice: undefined, error: undefined, errorKind: undefined }
     }, error => {
       if (active !== attempt) return
-      current = { state: 'failed', notice: undefined, error: publicError(error) }
-    }).finally(() => { if (active === attempt) { active = undefined; invalidateUsage() } })
+      // A timeout ends the attempt through the same abort a cancel uses, so the
+      // cause travels beside the state instead of through the error text.
+      current = timedOut
+        ? { state: 'failed', notice: undefined, error: 'Sign-in timed out; start it again when you are ready.', errorKind: 'timeout' }
+        : { state: 'failed', notice: undefined, error: publicError(error) }
+    }).finally(() => { clearTimeout(deadline); if (active === attempt) { active = undefined; invalidateUsage() } })
     // The attempt owns its own failures; an unobserved rejection here would
     // otherwise surface as an unhandled one.
     attempt.job.catch(() => {})
@@ -108,7 +133,7 @@ export function createCodexManagement(ctx: CodexContext, invalidateUsage: (pause
     active?.controller.abort()
     ctx.authorization.cancel(CODEX_KEY)
     await active?.job
-    if (current.state === 'pending') current = { state: 'cancelled', notice: undefined, error: undefined }
+    if (current.state === 'pending') current = { state: 'cancelled', notice: undefined, error: undefined, errorKind: undefined }
     return status()
   }
   return {
@@ -118,7 +143,7 @@ export function createCodexManagement(ctx: CodexContext, invalidateUsage: (pause
       try {
         await cancel()
         await forgetCodexLogin(ctx)
-        current = { state: 'idle', notice: undefined, error: undefined }
+        current = { state: 'idle', notice: undefined, error: undefined, errorKind: undefined }
         return status()
       } finally { invalidateUsage(false) }
     },

@@ -84,13 +84,30 @@ export function imageMediaType(data: Buffer): ImageMediaType | undefined {
   if (data.length >= 3 && data[0] === 255 && data[1] === 216 && data[2] === 255) return 'image/jpeg'
   if (data.length >= 12 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
 }
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+/**
+ * Whether the bits a base64 decoder discards are zero.
+ *
+ * `Buffer.from(..., 'base64')` ignores the unused bits of a padded final
+ * quantum, so two different strings can decode to the same bytes. Re-encoding
+ * the whole payload to prove canonicality is what made one 20 MiB image cost
+ * another 27 MiB and a second pass; checking that quantum is equivalent and
+ * constant-cost. The caller guarantees a non-empty string whose length is a
+ * multiple of four and whose only non-alphabet characters are trailing padding.
+ */
+export function canonicalBase64(encoded: string) {
+  const pad = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0
+  if (pad === 0) return true
+  const value = BASE64_ALPHABET.indexOf(encoded[encoded.length - pad - 1])
+  return value !== -1 && value % (pad === 2 ? 16 : 4) === 0
+}
 export function decodeImageResponse(value: unknown, byteCap: number) {
   if (!object(value) || !Array.isArray(value.data) || value.data.length !== 1 || !object(value.data[0])) throw new ImageError('invalid-response')
   const encoded = value.data[0].b64_json
   if (typeof encoded !== 'string' || !encoded.length || encoded.length > 4 * Math.ceil(byteCap / 3)
     || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new ImageError('invalid-response')
   const data = Buffer.from(encoded, 'base64')
-  if (!data.length || data.length > byteCap || data.toString('base64') !== encoded) throw new ImageError('invalid-response')
+  if (!data.length || data.length > byteCap || !canonicalBase64(encoded)) throw new ImageError('invalid-response')
   const mediaType = imageMediaType(data)
   if (!mediaType || value.output_format !== undefined && value.output_format !== ({ 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/webp': 'webp' } as const)[mediaType as 'image/png' | 'image/jpeg' | 'image/webp']) throw new ImageError('invalid-response')
   return { data, mediaType }
@@ -99,7 +116,10 @@ export function decodeImageResponse(value: unknown, byteCap: number) {
 async function readJson(response: Response, cap: number, signal: AbortSignal): Promise<unknown> {
   const reader = response.body?.getReader()
   if (!reader) throw new ImageError('invalid-response')
-  const chunks: Uint8Array[] = []; let size = 0
+  // One owned buffer, grown as the body arrives, instead of a chunk list plus
+  // a concatenated copy of it: a response body is the largest allocation this
+  // module makes, and each reader chunk is dropped as it is copied in.
+  let bytes = Buffer.alloc(Math.min(cap, 64 * 1024)), size = 0
   const abort = () => { void reader.cancel().catch(() => {}) }
   signal.addEventListener('abort', abort, { once: true })
   try {
@@ -107,11 +127,16 @@ async function readJson(response: Response, cap: number, signal: AbortSignal): P
     for (;;) {
       const part = await reader.read(); signal.throwIfAborted()
       if (part.done) break
-      size += part.value.byteLength
-      if (size > cap) throw new ImageError('invalid-response')
-      chunks.push(part.value)
+      const end = size + part.value.byteLength
+      if (end > cap) throw new ImageError('invalid-response')
+      if (end > bytes.length) {
+        const grown = Buffer.alloc(Math.min(cap, Math.max(bytes.length * 2, end)))
+        bytes.copy(grown, 0, 0, size)
+        bytes = grown
+      }
+      bytes.set(part.value, size); size = end
     }
-    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new ImageError('invalid-response') }
+    try { return JSON.parse(bytes.subarray(0, size).toString('utf8')) } catch { throw new ImageError('invalid-response') }
   } finally {
     signal.removeEventListener('abort', abort)
     await reader.cancel().catch(() => {}); reader.releaseLock()

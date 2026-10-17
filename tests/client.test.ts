@@ -219,7 +219,13 @@ test('quota list contribution registers and coexists in the real installed Host 
   skip: process.env.DSH_INSTALL_ROOT ? false : 'Set DSH_INSTALL_ROOT to test the installed slot registry.',
 }, async t => {
   const require = createRequire(resolve(process.env.DSH_INSTALL_ROOT, 'package.json'))
-  const { SlotCore } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-client-ui-slots')).href)
+  // 0.2.1-rc.1 stopped publishing dsh-client-ui-slots as a module the install
+  // root can resolve — the only copy ships inside its browser bundle — so this
+  // generation's registry cannot be loaded here. The seat itself is still
+  // covered by the in-process SlotCore double above.
+  let SlotCore
+  try { ({ SlotCore } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-client-ui-slots')).href)) }
+  catch { t.skip('This host generation publishes no loadable SlotCore module.'); return }
   const core = new SlotCore(), cleanups = []
   t.after(() => { for (const cleanup of cleanups.reverse()) cleanup() })
   cleanups.push(core.register({ name: 'root', children: {
@@ -424,6 +430,46 @@ test('polling recovers after a transient status failure without closing the logi
   assert.deepEqual(calls, ['status', 'login', 'status', 'status'])
   assert.deepEqual(controls(page.tree), ['退出登录'])
   assert.equal(elements(page.tree).some(element => element.props.role === 'alert'), false)
+})
+
+test('a healthy pending sign-in backs off its status polling', async () => {
+  const timers = []
+  const url = 'https://auth.openai.com/oauth/authorize?x=1'
+  const pending = { state: 'pending', available: true, connected: false, notice: { url } }
+  let reads = 0
+  const environment = {
+    open() { return { location: {}, close() {} } },
+    setTimeout(callback, delay) { const timer = { callback, delay, cancelled: false }; timers.push(timer); return timer },
+    clearTimeout(timer) { timer.cancelled = true },
+    async fetch(path) {
+      const operation = path.split('/').at(-1)
+      return { ok: true, async json() {
+        if (operation === 'login') return pending
+        reads += 1
+        return reads === 1 ? { state: 'idle', available: true, connected: false } : pending
+      } }
+    },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  elements(page.tree).find(element => element.type === 'button').props.onClick()
+  await settled()
+  const delays = [timers.at(-1).delay]
+  for (let poll = 0; poll < 3; poll += 1) { await timers.at(-1).callback(); delays.push(timers.at(-1).delay) }
+  // A fast first check, then a bounded steady rate; the attempt is bounded server-side.
+  assert.deepEqual(delays, [500, 1000, 2000, 2000])
+  assert.equal(controls(page.tree).join('|'), '打开浏览器完成授权|取消登录')
+})
+
+test('a timed-out sign-in is named instead of silently resetting', async () => {
+  const environment = {
+    open() { return null }, setTimeout() { return 1 }, clearTimeout() {},
+    async fetch() { return { ok: true, async json() { return { state: 'failed', errorKind: 'timeout', available: true, connected: true } } } },
+  }
+  const page = browser({ environment }).mount()
+  await settled()
+  assert.match(text(page.tree), /等待授权超时/)
+  assert.ok(elements(page.tree).some(element => element.props.role === 'alert'))
 })
 
 test('cancelling or unmounting aborts an in-flight poll without disabling retry', async () => {

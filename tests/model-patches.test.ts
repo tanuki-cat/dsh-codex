@@ -325,6 +325,27 @@ test('remote and runtime traversal order do not invalidate a confirmation', asyn
   assert.deepEqual((await patches.apply(preview.signature)).applied, ['new'])
 })
 
+test('concurrent reviews share one listing request, and a later review still refetches', async () => {
+  const { ctx, settings, llm } = fixture()
+  let requests = 0
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const patches = createModelPatches(ctx, { settings, llm }, async () => {
+    requests += 1
+    await gate
+    return new Response(JSON.stringify({ models: [model('new')] }))
+  })
+  const first = patches.preview()
+  const second = patches.preview()
+  release()
+  const [left, right] = await Promise.all([first, second])
+  assert.equal(requests, 1)
+  assert.equal(left.signature, right.signature)
+  // Not a cache: the confirmation signature must observe the source as it is.
+  await patches.preview()
+  assert.equal(requests, 2)
+})
+
 test('a semantic catalog change still invalidates a confirmation', async () => {
   const { ctx, settings, llm } = fixture()
   let capacity = 272000

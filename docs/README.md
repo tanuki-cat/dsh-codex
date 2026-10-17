@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.14`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.14>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。
+当前包版本为 `0.3.15`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.15>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。对 0.3.14 源码的审查问题与处理记录见 [0.3.14 代码审查与处理记录](<dsh-codex-0.3.14-code-review.md>)，其中 F1–F3 已随 `0.3.15` 发布。
 
 ## 目录
 
@@ -33,6 +33,7 @@ kind: "reference"
 
 | 文档 | 对应版本与用途 |
 | --- | --- |
+| [DSH rc.1 兼容发布说明](<design-task-release-codex-rc1-compat-0.3.15.md>) | 0.3.15 的 `0.2.1-rc.1` 版本声明、随版本发布的 F1–F3 修复与验证边界。 |
 | [DSH alpha.2 兼容发布说明](<design-task-release-codex-alpha2-compat-0.3.14.md>) | 0.3.14 的 `webRuntime` 移除适配、信任来源迁移与两代宿主验证边界。 |
 | [init 与独立版本配置发布说明](<design-task-release-codex-init-0.3.13.md>) | 0.3.13 的发布内容、安装步骤、用户反馈和自动化验证边界。 |
 | [模型补丁审查处理记录](<design-task-fix-codex-model-patch-review-0.3.9.md>) | 0.3.9 的逐项修复、风险缓解与未验证项；替代 0.3.8 方案作为该版本处理依据。 |
@@ -48,6 +49,7 @@ kind: "reference"
 | [ChatGPT 订阅接入](<design-task-add-chatgpt-subscription-plugin.md>) | 0.2.x 自建 `chatgpt-plan` provider 的实现与排障；该路由不属于当前插件。 |
 | [插件内 Codex 登录方案](<design-task-openai-codex-in-plugin-login.md>) | 登录入口的历史方案和实施记录；阶段二代写路由未实施，当前由宿主模型页添加路由。 |
 | [缺失模型补丁方案](<design-task-feature-codex-missing-model-patches.md>) | 0.3.8 及此前的设计与账号实测；刷新、恢复、版本选择和确认行为见 0.3.9 处理记录。 |
+| [0.3.14 代码审查与处理记录](<dsh-codex-0.3.14-code-review.md>) | 0.3.14 源码的审查问题与证据；F1–F3 已修复并随 0.3.15 发布，F4–F5 未处理。 |
 | [0.3.8 缺陷与风险审查](<dsh-codex-0.3.8-code-review.md>) | 原审查意见，不代表每项风险已证实或当前仍存在；逐项状态见 0.3.9 处理记录。 |
 | [5 小时额度条实施方案](<design-task-feature-codex-five-hour-usage-bar.md>) | 0.3.10 开发版方案与 dev.4 实施记录；正式版本边界见 0.3.10 发布说明。 |
 

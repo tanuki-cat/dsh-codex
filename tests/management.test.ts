@@ -233,6 +233,30 @@ test('no route response or injected script ever carries the stored OAuth credent
   assert.doesNotMatch(received[0], /access|refresh/i)
   await cleanup()
 })
+test('an abandoned sign-in is bounded and releases the usage pause', async () => {
+  const pauses = []
+  const ctx = {
+    credentials: store(),
+    authorization: {
+      describe() { return { inFlight: false, methods: [{ id: 'oauth' }] } },
+      // The seam's own contract: a flow settles when the attempt's signal aborts.
+      begin({ signal }) { return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason ?? new Error('aborted')), { once: true })) },
+      cancel() {},
+    },
+  }
+  const manager = createCodexManagement(ctx, paused => pauses.push(paused ?? false), { loginTimeoutMs: 25 })
+  assert.equal((await manager.start()).state, 'pending')
+  for (let read = 0; read < 400 && (await manager.status()).state === 'pending'; read += 1) await new Promise(resolve => setTimeout(resolve, 5))
+  const settled = await manager.status()
+  // Without the bound this stays pending forever: no second attempt is
+  // accepted and usage queries keep reporting a sign-in requirement.
+  assert.equal(settled.state, 'failed')
+  assert.equal(settled.errorKind, 'timeout')
+  assert.deepEqual(pauses, [true, false])
+  assert.equal((await manager.start()).state, 'pending')
+  await manager.cancel()
+})
+
 test('trust sources are read from whichever service the host generation provides', () => {
   // 0.2.1-alpha.2 dropped webRuntime: invocation authorities moved to
   // webStartup and the listener's own bind literal became an independent
