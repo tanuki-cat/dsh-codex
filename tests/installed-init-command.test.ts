@@ -1,21 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire, registerHooks } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { resolve, join } from 'node:path'
+import { registerHooks } from 'node:module'
+import { join } from 'node:path'
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { installedHostResolver, toolExecutor } from './helpers.ts'
 const root = process.env.DSH_INSTALL_ROOT
 const barrier = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 
 test('installed commands drive init in a separate real AgentLoop turn and preserve guarded creation conflicts', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to test installed init services.', timeout: 30_000,
 }, async t => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier.startsWith('@deepseek-ai/')) return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, specifier => specifier.startsWith('@deepseek-ai/')) })
   t.after(() => hooks.deregister())
   const { Context } = await import('@deepseek-ai/cordis')
   const { SessionStore } = await import('@deepseek-ai/dsh-session')
@@ -25,6 +21,9 @@ test('installed commands drive init in a separate real AgentLoop turn and preser
   const { LlmRuntime, LlmAdapter, createUserMessage } = await import('@deepseek-ai/dsh-llm')
   const { SystemPrompt } = await import('@deepseek-ai/dsh-system-prompt')
   const { ToolRuntime } = await import('@deepseek-ai/dsh-tools')
+  // 0.2.2-alpha.2 moves the tool presentation into mounted executor plugins;
+  // without one, dispatch fails with UNKNOWN_TOOL and no turn can run.
+  const executor = await toolExecutor('native')
   const { CommandRuntime } = await import('@deepseek-ai/dsh-commands')
   const { LocalFileSystem } = await import('@deepseek-ai/dsh-fs-local')
   const observation = await import('@deepseek-ai/dsh-fs-observation-policy')
@@ -51,6 +50,7 @@ test('installed commands drive init in a separate real AgentLoop turn and preser
   const mount = plugin => fibers.push(ctx.plugin(plugin))
   mount(SessionProjectionRegistry); mount(SessionStore); mount(AgentRegistry); mount(SystemPrompt)
   mount(ToolRuntime); mount(LlmRuntime); mount(CommandRuntime)
+  if (executor) mount(executor)
   fibers.push(ctx.plugin(LocalFileSystem, { cwd: directory }))
   if (workingDirectory) fibers.push(ctx.plugin(workingDirectory, { defaultDirectory: directory }))
   mount(observation); mount(fsTools)

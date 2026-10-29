@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire, registerHooks } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { resolve, join } from 'node:path'
+import { join } from 'node:path'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { fixture, signal } from './image-fixtures.ts'
+import { callTool, installedHostResolver, toolExecutor } from './helpers.ts'
 const root = process.env.DSH_INSTALL_ROOT
 
 /**
@@ -17,7 +17,7 @@ const root = process.env.DSH_INSTALL_ROOT
  * value, and under `ptc` only `run_code` is callable directly — so each
  * presentation is its own composition rather than one mount asserting both.
  */
-async function harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmentStore, registerImageTool, sharp, mode) {
+async function harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmentStore, registerImageTool, sharp, mode, executor) {
   const directory = await mkdtemp(join(tmpdir(), 'codex-image-test-'))
   const ctx = new Context(), fibers = []
   class Prompt extends Service { constructor(ctx) { super(ctx, 'systemPrompt') } tools() {} section() {} getSectionOrder() { return 0 } }
@@ -39,7 +39,11 @@ async function harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmen
     constructor(ctx) { super(ctx, 'workingDirectory') }
     async ensure() { return directory }
   }
-  fibers.push(ctx.plugin(Prompt), ctx.plugin(TestPtc), ctx.plugin(ToolRuntime, { mode }), ctx.plugin(WorkingDirectory), ctx.plugin(LocalAttachmentStore, { dshHome: directory }))
+  // `mode` is the presentation selection up to 0.2.1-rc.4; 0.2.2-alpha.2
+  // replaced it with a mounted executor plugin, and the old key now validates
+  // as removed — leaving the registry inactive instead of failing loudly.
+  fibers.push(ctx.plugin(Prompt), ctx.plugin(TestPtc), ctx.plugin(ToolRuntime, executor ? {} : { mode }), ctx.plugin(WorkingDirectory), ctx.plugin(LocalAttachmentStore, { dshHome: directory }))
+  if (executor) fibers.push(ctx.plugin(executor))
   await new Promise(resolve => setImmediate(resolve))
   assert.ok(ctx.tools); assert.ok(ctx.attachments)
   const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: { r: 255, g: 0, b: 0, alpha: 0.5 } } }).png().toBuffer()
@@ -61,11 +65,10 @@ async function harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmen
 test('installed registry persists native and PTC image outcomes and rejects text-only routes', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to test installed image services.',
 }, async t => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier.startsWith('@deepseek-ai/')) return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, specifier => specifier.startsWith('@deepseek-ai/')) })
+  // sharp ships with the host's attachment store; the test reads the reference
+  // material from the install rather than adding a second copy here.
+  const require = createRequire(join(root, 'package.json'))
   t.after(() => hooks.deregister())
   const { Context, Service } = await import('@deepseek-ai/cordis')
   const { ToolRuntime } = await import('@deepseek-ai/dsh-tools')
@@ -80,8 +83,11 @@ test('installed registry persists native and PTC image outcomes and rejects text
       await rm(host.directory, { recursive: true, force: true })
     }
   })
+  // 0.2.2-alpha.2 selects the presentation by mounting an executor plugin.
+  const executors = { native: await toolExecutor('native'), ptc: await toolExecutor('ptc') }
+
   const open = async mode => {
-    const host = await harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmentStore, registerImageTool, sharp, mode)
+    const host = await harness(Context, Service, ToolRuntime, PtcRuntime, LocalAttachmentStore, registerImageTool, sharp, mode, executors[mode])
     opened.push(host)
     return host
   }
@@ -91,7 +97,7 @@ test('installed registry persists native and PTC image outcomes and rejects text
     const { ctx, fibers, agent, state, png } = await open('native')
     const schema = ctx.tools.schemas(agent).find(tool => tool.name === 'image_gen')
     assert.ok(schema); assert.deepEqual(Object.keys(schema.parameters.properties), ['prompt', 'transparent_background'])
-    const native = await ctx.tools.execute({ name: 'image_gen', arguments: { prompt: 'fox', transparent_background: true }, agent, callId: 'native', signal: signal() })
+    const native = await callTool(ctx.tools, { name: 'image_gen', arguments: { prompt: 'fox', transparent_background: true }, agent, callId: 'native', signal: signal() })
     assert.equal(native.isError, false, JSON.stringify(native)); assert.deepEqual(state.route, ['test', 'vision'])
     const image = native.content.find(block => block.type === 'image').attachment
     assert.deepEqual(image, native.value.image); assert.equal(image.width, 2)
@@ -101,16 +107,16 @@ test('installed registry persists native and PTC image outcomes and rejects text
     const reopened = new LocalAttachmentStore(new Context(), { dshHome: agent.session.header.cwd })
     assert.deepEqual((await reopened.readImage(JSON.parse(JSON.stringify(image)))).data, stored.data)
     const before = state.calls; state.modalities = ['text']
-    const incapable = await ctx.tools.execute({ name: 'image_gen', arguments: { prompt: 'fox' }, agent, callId: 'text-route', signal: signal() })
+    const incapable = await callTool(ctx.tools, { name: 'image_gen', arguments: { prompt: 'fox' }, agent, callId: 'text-route', signal: signal() })
     assert.equal(incapable.isError, true); assert.equal(state.calls, before)
-    const invalid = await ctx.tools.execute({ name: 'image_gen', arguments: { prompt: 'fox', url: 'https://evil.invalid' }, agent, callId: 'unknown-param', signal: signal() })
+    const invalid = await callTool(ctx.tools, { name: 'image_gen', arguments: { prompt: 'fox', url: 'https://evil.invalid' }, agent, callId: 'unknown-param', signal: signal() })
     assert.equal(invalid.isError, true); assert.equal(state.calls, before)
     state.modalities = ['text', 'image']
     const damaged = png.subarray(0, 12)
     const damagedRefusal = await ctx.attachments.saveImage({ data: damaged, mediaType: 'image/png' }).then(() => assert.fail('damaged PNG must fail'), error => error.code)
     assert.equal(damagedRefusal, 'INVALID_IMAGE')
     state.transportFailure = true
-    const failure = await ctx.tools.execute({ name: 'image_gen', arguments: { prompt: 'fox' }, agent, callId: 'diagnostic-direct', signal: signal() })
+    const failure = await callTool(ctx.tools, { name: 'image_gen', arguments: { prompt: 'fox' }, agent, callId: 'diagnostic-direct', signal: signal() })
     assert.equal(failure.isError, true)
     assert.match(JSON.stringify(failure.content), /stage=request/); assert.match(JSON.stringify(failure.content), /causeCode=ECONNRESET/)
     assert.doesNotMatch(JSON.stringify(failure), /private-access|private-account/)
@@ -122,12 +128,12 @@ test('installed registry persists native and PTC image outcomes and rejects text
   // dispatch is observable as its own event.
   {
     const { ctx, agent, state, events } = await open('ptc')
-    const nested = await ctx.tools.execute({ name: 'run_code', arguments: { description: 'Generate a test image', code: "return await tools.image_gen({prompt: 'fox'})", timeoutMs: 240_000 }, agent, callId: 'nested', signal: signal() })
+    const nested = await callTool(ctx.tools, { name: 'run_code', arguments: { description: 'Generate a test image', code: "return await tools.image_gen({prompt: 'fox'})", timeoutMs: 240_000 }, agent, callId: 'nested', signal: signal() })
     assert.equal(nested.isError, false, JSON.stringify(nested))
     assert.ok(nested.additionalContexts.some(context => context.content.some(block => block.type === 'image')))
     assert.ok(events.some(event => event.type === 'tool/ptc-dispatch' && event.data.name === 'image_gen' && event.data.content.some(block => block.type === 'image')))
     state.transportFailure = true
-    const failure = await ctx.tools.execute({ name: 'run_code', arguments: { description: 'Check image diagnostics', code: "return await tools.image_gen({prompt: 'fox'})", timeoutMs: 240_000 }, agent, callId: 'diagnostic-nested', signal: signal() })
+    const failure = await callTool(ctx.tools, { name: 'run_code', arguments: { description: 'Check image diagnostics', code: "return await tools.image_gen({prompt: 'fox'})", timeoutMs: 240_000 }, agent, callId: 'diagnostic-nested', signal: signal() })
     assert.equal(failure.isError, true)
     assert.match(JSON.stringify(failure.content), /stage=request/); assert.match(JSON.stringify(failure.content), /causeCode=ECONNRESET/)
     assert.doesNotMatch(JSON.stringify(failure), /private-access|private-account/)

@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire, registerHooks } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { registerHooks } from 'node:module'
+import { installedHostResolver } from './helpers.ts'
 
 const root = process.env.DSH_INSTALL_ROOT
+const host = specifier => specifier.startsWith('@deepseek-ai/') || specifier === 'undici'
 
 /**
  * The official openai-codex sign-in surface, against the real authorization
@@ -18,11 +18,7 @@ const root = process.env.DSH_INSTALL_ROOT
 test('installed DSH accepts the openai-codex management surface when llm-pi-ai offers the flow', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to run against an installed DSH.',
 }, async () => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier.startsWith('@deepseek-ai/') || specifier === 'undici') return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, host) })
   const { Context, Service } = await import('@deepseek-ai/cordis')
   const { default: LlmRuntime } = await import('@deepseek-ai/dsh-llm')
   const { CredentialProvider } = await import('@deepseek-ai/dsh-credentials')
@@ -71,11 +67,7 @@ test('installed DSH accepts the openai-codex management surface when llm-pi-ai o
 test('installed DSH registers the surface before its authorization flow', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to run against an installed DSH.',
 }, async () => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier.startsWith('@deepseek-ai/') || specifier === 'undici') return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, host) })
   const { Context, Service } = await import('@deepseek-ai/cordis')
   const { default: LlmRuntime } = await import('@deepseek-ai/dsh-llm')
   const { CredentialProvider } = await import('@deepseek-ai/dsh-credentials')

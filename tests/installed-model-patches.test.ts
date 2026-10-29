@@ -1,8 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire, registerHooks } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
+import { registerHooks } from 'node:module'
+import { installedHostResolver } from './helpers.ts'
 
 /**
  * The model patch against the real adapter, its real Config schema and the
@@ -33,13 +32,7 @@ const CANDIDATES = ['gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.3-sol']
 
 // The real adapter pulls the whole credentials module, so this resolves the
 // installed one rather than a stub; the plugin only needs its key grammar.
-const hook = () => registerHooks({ resolve(specifier, context, next) {
-  if (specifier.startsWith('@deepseek-ai/') || specifier === 'undici') {
-    const require = createRequire(resolve(root, 'package.json'))
-    return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-  }
-  return next(specifier, context)
-} })
+const hook = () => registerHooks({ resolve: installedHostResolver(root, specifier => specifier.startsWith('@deepseek-ai/') || specifier === 'undici') })
 
 const remoteModel = (slug, other = {}) => ({
   slug, display_name: slug, visibility: 'list', supported_in_api: false,

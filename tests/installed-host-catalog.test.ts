@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire, registerHooks } from 'node:module'
+import { registerHooks } from 'node:module'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { resolve as esmResolve } from 'import-meta-resolve'
+import { installedHostResolver } from './helpers.ts'
 import { fixture, imageResponse, signal } from './image-fixtures.ts'
 
 const root = process.env.DSH_INSTALL_ROOT
@@ -11,11 +12,7 @@ const root = process.env.DSH_INSTALL_ROOT
 test('the real pi-ai auth resolver rotates a grant under the DSH record transaction', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to test the installed pi-ai auth resolver.',
 }, async t => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier === '@deepseek-ai/dsh-credentials') return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, specifier => specifier === '@deepseek-ai/dsh-credentials') })
   try {
     const pi = await import(esmResolve('@earendil-works/pi-ai', pathToFileURL(resolve(root, 'package.json')).href))
     const { openaiCodexProvider } = await import(esmResolve('@earendil-works/pi-ai/providers/openai-codex', pathToFileURL(resolve(root, 'package.json')).href))

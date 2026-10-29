@@ -7,7 +7,7 @@ kind: "reference"
 
 ## 概要
 
-当前包版本为 `0.3.15`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.15>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。对 0.3.14 源码的审查问题与处理记录见 [0.3.14 代码审查与处理记录](<dsh-codex-0.3.14-code-review.md>)，其中 F1–F3 已随 `0.3.15` 发布。
+当前包版本为 `0.3.16`；发布状态以 [GitHub Release](<https://github.com/tanuki-cat/dsh-codex/releases/tag/v0.3.16>) 为准。安装、登录、模型补丁与账号额度以[项目 README](<../README.md>)和当前源码为准；版本记录保留对应实现的决策、验证与限制，不作为新版本的操作指南。对 0.3.14 源码的审查问题与处理记录见 [0.3.14 代码审查与处理记录](<dsh-codex-0.3.14-code-review.md>)，其中 F1–F3 已随 `0.3.15` 发布。
 
 ## 目录
 
@@ -33,6 +33,7 @@ kind: "reference"
 
 | 文档 | 对应版本与用途 |
 | --- | --- |
+| [DSH 0.2.2-alpha.2 兼容发布说明](<design-task-release-codex-0.2.2-alpha2-compat-0.3.16.md>) | 0.3.16 的 `0.2.1-rc.2` 至 `rc.4` 与 `0.2.2-alpha.2` 版本声明、工具执行器适配与验证边界。 |
 | [DSH rc.1 兼容发布说明](<design-task-release-codex-rc1-compat-0.3.15.md>) | 0.3.15 的 `0.2.1-rc.1` 版本声明、随版本发布的 F1–F3 修复与验证边界。 |
 | [DSH alpha.2 兼容发布说明](<design-task-release-codex-alpha2-compat-0.3.14.md>) | 0.3.14 的 `webRuntime` 移除适配、信任来源迁移与两代宿主验证边界。 |
 | [init 与独立版本配置发布说明](<design-task-release-codex-init-0.3.13.md>) | 0.3.13 的发布内容、安装步骤、用户反馈和自动化验证边界。 |

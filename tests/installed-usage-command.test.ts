@@ -1,19 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire, registerHooks } from 'node:module'
-import { pathToFileURL } from 'node:url'
-import { resolve } from 'node:path'
-import { store, json } from './helpers.ts'
+import { registerHooks } from 'node:module'
+import { installedHostResolver, store, json } from './helpers.ts'
 const root = process.env.DSH_INSTALL_ROOT
 
 test('installed CommandRuntime discovers usage and logs quota results without model work', {
   skip: root ? false : 'Set DSH_INSTALL_ROOT to test installed commands.',
 }, async t => {
-  const require = createRequire(resolve(root, 'package.json'))
-  const hooks = registerHooks({ resolve(specifier, context, next) {
-    if (specifier.startsWith('@deepseek-ai/')) return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
-    return next(specifier, context)
-  } })
+  const hooks = registerHooks({ resolve: installedHostResolver(root, specifier => specifier.startsWith('@deepseek-ai/')) })
   t.after(() => hooks.deregister())
   const { Context } = await import('@deepseek-ai/cordis')
   const { CommandRuntime } = await import('@deepseek-ai/dsh-commands')

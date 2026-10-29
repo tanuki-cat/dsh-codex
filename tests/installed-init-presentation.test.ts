@@ -26,7 +26,7 @@ test('installed Chat renders init as a collapsed turn trigger, preserves expanda
   }
   const store = { defineStore: () => () => assert.fail('unrelated store hooks must not run') }
   const primitives = new Proxy({}, { get: (_target, name) => String(name) })
-  const loaded = registration.factory(name => {
+  const load = name => {
     if (name === 'react') return React
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' }
     if (name === 'react-dom') return { createPortal: value => value }
@@ -36,7 +36,11 @@ test('installed Chat renders init as a collapsed turn trigger, preserves expanda
     // reaches it while rendering the transcript, which this test never draws.
     if (name === '@tanstack/react-virtual') return {}
     assert.fail('unexpected host dependency: ' + name)
-  })
+  }
+  // Newer Chat clients also resolve bundled image URLs through the loader's
+  // asset helper. The init transcript draws no image, so the value is unused.
+  load.asset = () => ''
+  const loaded = registration.factory(load)
   const { createInitCommand } = await import('../lib/init-command.js')
   const { INIT_PROMPT } = await import('../lib/init-prompt.js')
   let message

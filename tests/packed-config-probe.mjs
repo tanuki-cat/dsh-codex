@@ -3,9 +3,12 @@ import { createRequire, registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 const [directory, project, expected] = process.argv.slice(2)
-const require = createRequire(join(project, 'package.json'))
+// Rebasing the parent URL keeps resolution inside the project instead of
+// re-entering this hook: `require.resolve` called from a resolve hook recurses
+// on Node 24 until the stack overflows.
+const projectURL = pathToFileURL(join(project, 'package.json')).href
 const hooks = registerHooks({ resolve(specifier, context, next) {
-  if (specifier.startsWith('@deepseek-ai/') || specifier === 'import-meta-resolve') return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
+  if (specifier.startsWith('@deepseek-ai/') || specifier === 'import-meta-resolve') return next(specifier, { ...context, parentURL: projectURL })
   return next(specifier, context)
 } })
 try {
