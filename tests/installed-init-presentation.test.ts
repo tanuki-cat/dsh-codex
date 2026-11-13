@@ -13,9 +13,11 @@ test('installed Chat renders init as a collapsed turn trigger, preserves expanda
   const file = join(dirname(require.resolve('@deepseek-ai/dsh-client-ui-chat')), 'client.js')
   let source = readFileSync(file, 'utf8'), registration
   // Expose native closures only inside this private VM; do not reimplement the host classifier or renderer.
-  const marker = 'return module.exports;'
+  // 0.2.2-rc.2 minifies the client bundle, which drops the space before the
+  // factory's return; the export boundary is the statement, not its spacing.
+  const marker = /return module\.exports;?/
   assert.equal(source.split(marker).length, 2, 'installed client must have one factory export boundary')
-  source = source.replace(marker, 'exports.initTest = { messageDefinition, TurnTriggerNodeView }; ' + marker)
+  source = source.replace(marker, matched => 'exports.initTest = { messageDefinition, TurnTriggerNodeView }; ' + matched)
   runInNewContext(source, { window: { __ModuleLoader__: { load(value) { registration = value } } }, URL, AbortController, console })
   let open = false
   const jsx = (type, props) => ({ type, props: props ?? {} })
